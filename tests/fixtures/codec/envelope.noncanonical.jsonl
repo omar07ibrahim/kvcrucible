@@ -1,0 +1,1 @@
+{ "stream_id":"s", "origin":"live", "mutations":[{"op":"clear","metadata":{"b":2,"a":1}}], "kind":"envelope", "extensions":{}, "envelope_id":"e", "cursor":"0" }

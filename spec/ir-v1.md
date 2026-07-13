@@ -1,6 +1,7 @@
 # KVCrucible trace IR `v1alpha1`
 
-Status: design contract; decoder not yet implemented.
+Status: typed IR and bounded per-record codec implemented; trace-wide validation
+pending.
 
 The trace IR records two independent facts:
 
@@ -142,7 +143,8 @@ Hash representation is part of identity:
 
 An unsigned integer is encoded as a decimal string with no leading zero unless
 its value is zero, so JSON runtimes cannot lose precision. Byte strings use
-base64. Decoders must not coerce one representation into the other, even if
+base64 and must decode to at least one byte; the default decoded-size ceiling is
+256 bytes. Decoders must not coerce one representation into the other, even if
 their displayed values appear equivalent.
 
 Within the modeled cache view, a key is:
@@ -201,10 +203,23 @@ When present, `block_metadata` has exactly one bounded object per hash. It can
 preserve redacted, adapter-specific evidence such as the per-block identity
 inputs exposed by vLLM. It does not independently participate in cache identity.
 
-Group and medium are tagged values. Group is either `index` with a non-negative
-integer or `unspecified`. Medium is either `named` with the case-preserved source
-value or `unspecified`. Missing group or medium is never coerced to group zero or
-GPU, because that would alias distinct upstream keys.
+Group and medium are tagged values. Group is either `index` with an unsigned
+32-bit value or `unspecified`. Medium is either `named` with the case-preserved
+source value or `unspecified`. Missing group or medium is never coerced to group
+zero or GPU, because that would alias distinct upstream keys.
+
+When present, `token_evidence` is exactly one of:
+
+- `keyed_digest` with algorithm `hmac-sha256`, a non-secret `key_id`, and 64
+  lowercase hexadecimal characters;
+- `unkeyed_digest` with algorithm `sha256` and 64 lowercase hexadecimal
+  characters, explicitly labeled as linkable rather than confidential;
+- `token_ids` with a bounded ordered `values` array for a trace whose header says
+  `contains_token_ids`.
+
+Trace-level validation checks that evidence agrees with the header redaction
+mode. Optional fields are omitted when unavailable; explicit JSON `null` is not
+accepted as a synonym for absence.
 
 A repeated store of an existing key is idempotent at this abstraction level. It
 does not prove that a physical block was newly allocated.
@@ -255,6 +270,11 @@ Faults are stored separately from the captured envelopes:
       "action": "duplicate",
       "target": {"envelope_id": "env-publisher-a-14", "occurrence": 0},
       "copies": 1
+    },
+    {
+      "action": "move_before",
+      "target": {"envelope_id": "env-publisher-a-14", "occurrence": 1},
+      "anchor": {"envelope_id": "env-publisher-a-13", "occurrence": 0}
     }
   ],
   "extensions": {}
@@ -263,11 +283,13 @@ Faults are stored separately from the captured envelopes:
 
 Every original envelope begins with occurrence zero. Duplicate actions create
 stable later occurrences. Reordering names both a stable target and stable
-anchor rather than a global delivery ordinal. Actions are applied in recorded
-order, must be deterministic and seed-free after materialization, and may refer
-only to records or occurrences created earlier in the same trace. Removing an
-envelope during reduction never renumbers another fault target; any now-dangling
-action must be removed with it.
+anchor rather than a global delivery ordinal. `move_before` removes the target
+occurrence from the current materialized order and inserts it immediately before
+the anchor; target and anchor must differ and already exist. Actions are applied
+in recorded order, must be deterministic and seed-free after materialization,
+and may refer only to records or occurrences created earlier in the same trace.
+Removing an envelope during reduction never renumbers another fault target; any
+now-dangling action must be removed with it.
 
 ## Extension policy
 

@@ -13,8 +13,9 @@ counterexamples.
 This is not a serving engine, a throughput simulator, or a claim that vLLM or
 Dynamo is formally verified.
 
-> **Status:** contract-first prototype. The trace semantics and threat boundary
-> are published; no production-engine adapter is implemented yet.
+> **Status:** contract-first prototype. The typed IR and bounded per-record
+> canonical JSONL codec are implemented; trace-wide validation, the state model,
+> and the production-engine adapter are still pending.
 
 ## The problem
 
@@ -97,6 +98,11 @@ Other development hosts use their native target; the published Linux artifact
 never depends on that native build.
 
 ## Roadmap
+
+Slice 2 currently covers strict single-record decoding and encoding: duplicate
+decoded keys, non-integer numbers, unsafe integers, malformed UTF-8, structural
+budgets, and noncanonical input are tested before typed-IR construction. The
+bounded multi-record reader and trace-wide ordering checks are the next gate.
 
 | Slice | Deliverable | Evidence gate |
 |---|---|---|

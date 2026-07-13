@@ -1,9 +1,13 @@
 //! Public contract for `KVCrucible`.
 //!
-//! The first project slice deliberately exposes only the scope contract. Trace
-//! decoding and replay arrive after the semantics are fixed and reviewed.
+//! The crate exposes the reviewed scope contract, typed trace IR, and bounded
+//! canonical record codec. Trace-wide validation and replay remain later layers.
 
 use serde::Serialize;
+
+pub mod codec;
+pub mod ir;
+pub mod limits;
 
 /// Canonical trace format targeted by the first release.
 pub const TRACE_FORMAT_VERSION: &str = "kvcrucible.trace/v1alpha1";
