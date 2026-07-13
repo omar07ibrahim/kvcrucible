@@ -13,9 +13,9 @@ counterexamples.
 This is not a serving engine, a throughput simulator, or a claim that vLLM or
 Dynamo is formally verified.
 
-> **Status:** contract-first prototype. The typed IR and bounded per-record
-> canonical JSONL codec are implemented; trace-wide validation, the state model,
-> and the production-engine adapter are still pending.
+> **Status:** contract-first prototype. The typed IR, bounded streaming canonical
+> JSONL codec, and incremental trace-wide structural validator are implemented;
+> the state model and production-engine adapter are still pending.
 
 ## The problem
 
@@ -99,16 +99,16 @@ never depends on that native build.
 
 ## Roadmap
 
-Slice 2 covers strict record decoding and encoding plus bounded streaming JSONL
-framing: duplicate decoded keys, non-integer numbers, unsafe integers, malformed
-UTF-8, structural budgets, physical-line bytes, trace bytes, record counts, and
-noncanonical input are checked before typed-IR construction. Trace-wide ordering
-and reference checks are the next gate.
+Slice 2 covers strict record decoding and encoding, bounded streaming JSONL
+framing, and trace-wide structural validation: duplicate decoded keys,
+non-integer numbers, unsafe integers, malformed UTF-8, structural budgets,
+physical-line bytes, trace bytes, record counts, ordering, identities, privacy
+evidence, and fault references are checked before state folding.
 
 | Slice | Deliverable | Evidence gate |
 |---|---|---|
 | 1 | Charter, IR, threat model, static CLI | format, lint, test, release build |
-| 2 | Typed IR and bounded JSONL codec | golden vectors and adversarial limits |
+| 2 | Bounded IR ingestion and trace validation | golden vectors and adversarial limits |
 | 3 | Tri-state cache-view fold | state-machine and property tests |
 | 4 | Fault/replay schedules and oracle | faulted/pristine convergence corpus |
 | 5 | Witness reducer and report CLI | deterministic 1-minimal regressions |

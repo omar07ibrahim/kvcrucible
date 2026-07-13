@@ -1,7 +1,7 @@
 # KVCrucible trace IR `v1alpha1`
 
-Status: typed IR and bounded per-record codec implemented; trace-wide validation
-pending.
+Status: typed IR, bounded streaming codec, and incremental trace-wide structural
+validation implemented; cache-view folding pending.
 
 The trace IR records two independent facts:
 
@@ -34,7 +34,8 @@ vectors.
 
 ## Trace header
 
-The first record declares the format and capture policy:
+Exactly one header is required, and it is the first record. It declares the
+format and capture policy:
 
 ```json
 {
@@ -74,10 +75,12 @@ Every publisher stream is declared before its first envelope:
 ```
 
 The canonical stream identity is the complete tuple `(engine, engine_version,
-engine_instance, publisher, data_parallel_rank, epoch)`. `stream_id` is only a
-trace-local reference to that tuple. `worker_metadata` is optional evidence and
-does not participate in identity because one vLLM publisher may aggregate
-events from several tensor-parallel workers.
+engine_instance, publisher, data_parallel_rank, epoch)`. Both that tuple and
+`stream_id` are unique within a trace. `stream_id` is only a trace-local
+reference to the tuple. `worker_metadata`, baseline, and initial cursor are not
+identity components because one publisher may aggregate events from several
+tensor-parallel workers and those fields describe evidence rather than the
+publisher incarnation.
 
 Supported baseline declarations are:
 
@@ -129,8 +132,11 @@ that recomputed value. Capture timing and top-level `extensions` are excluded;
 validated mutation metadata is included. A claimed digest from an engine wire
 format is retained only as non-authoritative adapter evidence.
 
-The cursor is not globally comparable. Two streams may legally emit the same
-cursor, advance at different rates, or contain different cache sets.
+An envelope cursor cannot be below its stream's declared `initial_cursor`.
+Beyond that lower bound, structural validation does not require monotonic
+record order: live and replay envelopes can be interleaved. The cursor is not
+globally comparable. Two streams may legally emit the same cursor, advance at
+different rates, or contain different cache sets.
 
 ## Opaque cache hashes
 
@@ -281,15 +287,22 @@ Faults are stored separately from the captured envelopes:
 }
 ```
 
-Every original envelope begins with occurrence zero. Duplicate actions create
-stable later occurrences. Reordering names both a stable target and stable
-anchor rather than a global delivery ordinal. `move_before` removes the target
-occurrence from the current materialized order and inserts it immediately before
-the anchor; target and anchor must differ and already exist. Actions are applied
-in recorded order, must be deterministic and seed-free after materialization,
-and may refer only to records or occurrences created earlier in the same trace.
-Removing an envelope during reduction never renumbers another fault target; any
-now-dangling action must be removed with it.
+Every `schedule_id` is unique. Each schedule is an independent alternative, not
+a continuation of another schedule. At its record position it snapshots the
+original occurrence zero of every earlier envelope; a later envelope is not
+available to it. Positive occurrences and removals are local to that one
+schedule and never leak into another schedule's namespace.
+
+Within a schedule, duplicate actions allocate stable positive occurrences in
+ascending order. An action may refer only to an original in its earlier trace
+prefix or to a positive occurrence created by an earlier action in that same
+schedule. Reordering names both a stable target and stable anchor rather than a
+global delivery ordinal. `move_before` removes the target occurrence from the
+current materialized order and inserts it immediately before the anchor;
+target and anchor must differ, already exist, and not have been dropped.
+Actions are applied in recorded order and are deterministic and seed-free after
+materialization. Removing an envelope during witness reduction never renumbers
+another fault target; any now-dangling action must be removed with it.
 
 ## Extension policy
 

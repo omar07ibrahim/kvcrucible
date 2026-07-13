@@ -4,7 +4,7 @@
 pub const MAX_JSON_DEPTH: usize = 64;
 
 /// Default limits are intentionally conservative enough for real event batches
-/// while keeping every single-record operation bounded.
+/// while keeping record and whole-trace operations bounded.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Limits {
     /// Maximum JSON payload bytes accepted for one record, excluding newline.
@@ -13,6 +13,20 @@ pub struct Limits {
     pub max_trace_bytes: u64,
     /// Maximum physical records in one trace.
     pub max_records_per_trace: u64,
+    /// Maximum publisher stream declarations in one trace.
+    pub max_streams_per_trace: u64,
+    /// Maximum event envelopes in one trace.
+    pub max_envelopes_per_trace: u64,
+    /// Maximum independent fault schedules in one trace.
+    pub max_fault_schedules_per_trace: u64,
+    /// Maximum fault actions summed across all schedules in one trace.
+    pub max_fault_actions_per_trace: u64,
+    /// Maximum UTF-8 bytes cloned into trace-wide identity indexes.
+    pub max_identity_bytes_per_trace: u64,
+    /// Maximum original and synthesized occurrences in one schedule namespace.
+    pub max_occurrences_per_schedule: u64,
+    /// Maximum envelope-prefix plus synthesized-occurrence work across schedules.
+    pub max_schedule_work_per_trace: u64,
     /// Maximum nested JSON value depth; values above [`MAX_JSON_DEPTH`] are invalid.
     pub max_depth: usize,
     /// Maximum scalar and container values in one record.
@@ -55,6 +69,13 @@ impl Default for Limits {
             max_line_bytes: 1024 * 1024,
             max_trace_bytes: 64 * 1024 * 1024,
             max_records_per_trace: 100_000,
+            max_streams_per_trace: 4_096,
+            max_envelopes_per_trace: 65_536,
+            max_fault_schedules_per_trace: 1_024,
+            max_fault_actions_per_trace: 65_536,
+            max_identity_bytes_per_trace: 16 * 1024 * 1024,
+            max_occurrences_per_schedule: 131_072,
+            max_schedule_work_per_trace: 1_000_000,
             max_depth: 32,
             max_values: 65_536,
             max_string_bytes: 16 * 1024,

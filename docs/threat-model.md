@@ -46,8 +46,8 @@ responses, and engine-specific extension fields. They may try to:
 - The Rust crate forbids `unsafe` code.
 
 Initial default ceilings are centralized in `Limits` and boundary-tested by the
-codec. They will also be printed in report metadata so that changing a bound
-cannot silently change a verdict.
+codec, stream reader, and structural validator. They will also be printed in
+report metadata so that changing a bound cannot silently change a verdict.
 
 ## Privacy posture
 
