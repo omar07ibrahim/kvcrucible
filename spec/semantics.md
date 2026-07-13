@@ -2,18 +2,19 @@
 
 Status: bounded internal semantic fingerprinting, the delivered-envelope state
 fold, sealed numeric fault plans, and deterministic drop/duplicate/reorder
-materialization are implemented. Replay requests and expiry, pristine/faulted
-orchestration, convergence, reduction, and reports remain v0.1 contracts for
-later slices.
+materialization are implemented. Schedule-prefix pristine/faulted execution and
+eligibility-aware per-stream convergence are also implemented. Replay request,
+outcome, response-attribution, and expiry orchestration, reduction, and reports
+remain v0.1 contracts for later slices.
 
 ## Current execution boundary
 
 The fold consumes envelopes in caller-supplied admission order or in the order
-of a materialized fault schedule. The envelope `origin` remains observed
-provenance: a synthesized transport duplicate shares its source allocation and
-does not become a replay response. Origin does not change cache-mutation
-semantics. A first-class pristine execution API belongs to the next
-pristine/faulted orchestration layer.
+of a materialized fault schedule. `compare_schedule` starts fresh pristine and
+faulted states over the exact stream and source prefixes visible at the schedule
+record. The envelope `origin` remains observed provenance: a synthesized
+transport duplicate shares its source allocation and does not become a replay
+response. Origin does not change cache-mutation semantics.
 
 The public coordinated path is one `TraceAssembler` under one `Limits` value:
 
@@ -27,8 +28,14 @@ The public coordinated path is one `TraceAssembler` under one `Limits` value:
 4. at EOF, require both structural completion and normalization seal before a
    `SealedTrace` capability is returned;
 5. materialize a schedule by ordinal over its physical source prefix, sharing
-   prepared sources through `Arc`; and
-6. start and finalize each stream state against the matching sealed trace.
+   prepared sources through `Arc`;
+6. compare fresh occurrence-zero physical-order and materialized-order folds for
+   every stream visible at that schedule; or
+7. start and finalize individual stream states against the matching sealed trace
+   when a caller needs direct disposition-level inspection.
+
+Streams and envelopes declared after a schedule record are outside that
+schedule's immutable snapshot and cannot affect either comparison side.
 
 State accumulated before a later structural failure is not an admissible
 result. The validator enforces header order, declaration order, redaction,
@@ -219,19 +226,27 @@ it is never treated as an automatically detected restart. Fault schedules may
 eventually alter delivery around a declared boundary, but may not invent an
 epoch or producer incarnation.
 
-## Replay and convergence contract
+## Convergence and future replay contract
 
-Slice 4 now executes deterministic fault schedules while preserving physical
+Slice 4 executes deterministic fault schedules while preserving physical
 occurrence-zero order; the materializer never silently sorts envelopes by
-cursor. The remaining replay layer must issue bounded requests, attribute
-responses, and model attempt exhaustion and expiry before pristine and faulted
-folds are compared.
+cursor. `compare_schedule` then executes that physical order as the pristine
+side and the materialized order as the faulted side. For each visible publisher
+stream it returns `Converged`, `Diverged`, or `Ineligible`.
 
-A future convergence check is eligible only when the faulted state is `exact`
-at the same logical frontier as the pristine state. It passes only when their
-same-scope canonical cache views are equal and no active unknown reason remains.
-An `unknown` state is ineligible, not automatically non-convergent. Historical
-diagnostics remain reportable after membership recovery.
+A comparison is eligible only when both finalized states are `Exact`, both
+cache views are authoritative, neither side has an active unknown reason, both
+pending-envelope count and pending canonical bytes are zero, and the logical
+frontiers match. Equal same-scope canonical cache views then mean `Converged`;
+different views mean `Diverged`. Any failed prerequisite means `Ineligible`,
+not divergence. Historical diagnostics do not change the verdict. A hard fold
+failure remains a typed execution error, and a zero-stream comparison contains
+no per-stream verdict rather than an aggregate convergence claim.
+
+Replay orchestration remains a distinct future layer. In `v1alpha1`,
+`origin: replay` records observed provenance only; the IR has no replay-request
+identity, attempt outcome, response attribution, or expiry record. The model
+therefore never infers a replay transaction from a cursor gap or origin flag.
 
 ## Future witness contract
 

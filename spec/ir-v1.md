@@ -2,8 +2,9 @@
 
 Status: typed IR, bounded streaming codec, incremental trace-wide structural
 validation, internal non-exported semantic fingerprinting, and the
-delivered-envelope cache-view fold are implemented. Fault-schedule execution
-and replay orchestration are pending.
+delivered-envelope cache-view fold are implemented. Fault materialization and
+schedule-prefix pristine/faulted comparison are implemented; replay
+orchestration is pending.
 
 The trace IR records two independent facts:
 
@@ -282,12 +283,15 @@ Faults are stored separately from the captured envelopes. Their structure and
 references are resolved to numeric source occurrences during trace validation,
 then exposed only after EOF in the same sealed capability as their normalized
 sources. The implemented materializer executes their delivery order; replay
-responses remain a separate pending policy layer.
+responses remain a separate pending policy layer. `origin: replay` records
+observed provenance only. `v1alpha1` has no replay-request identity,
+attempt/outcome, response-attribution, or expiry records, so orchestration is
+never inferred from a cursor gap or origin flag.
 
 ```json
 {
   "kind": "fault_schedule",
-  "schedule_id": "drop-12-replay",
+  "schedule_id": "drop-and-reorder",
   "actions": [
     {
       "action": "drop",

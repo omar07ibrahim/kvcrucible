@@ -6,10 +6,11 @@ from unreliable event streams.
 Modern inference routers consume cache events to estimate which worker already
 holds a prompt prefix. That view can become subtly wrong when a consumer joins
 late, misses a bounded replay window, receives a duplicate, observes a restart,
-or mistakes a publisher-local sequence for a global one. KVCrucible already
-turns delivered traces into explicit, bounded uncertainty and materializes
-deterministic faulted executions; replay policy and convergence witnesses are
-the next orchestration layers.
+or mistakes a publisher-local sequence for a global one. KVCrucible turns
+delivered traces into explicit, bounded uncertainty, materializes deterministic
+fault executions, and compares fresh pristine and faulted folds per visible
+publisher stream. Explicit replay request/outcome/expiry orchestration and
+witness reduction remain pending.
 
 This is not a serving engine, a throughput simulator, or a claim that vLLM or
 Dynamo is formally verified.
@@ -20,8 +21,10 @@ Dynamo is formally verified.
 > now seals validated records, normalized sources, stream blueprints, and opaque
 > numeric fault plans into one capability. Its bounded linked-list materializer
 > executes deterministic drop, duplicate, and reorder actions without copying
-> source payloads. Replay, the convergence oracle, witness reduction, reports,
-> and a production-engine adapter are next.
+> source payloads. A first-class oracle now returns `Converged`, `Diverged`, or
+> `Ineligible` per stream without treating incomplete evidence as failure.
+> Replay orchestration, witness reduction, reports, and a production-engine
+> adapter are next.
 
 ## The problem
 
@@ -39,9 +42,10 @@ truthfully call that view complete. A duplicate store may be harmless, while
 the same cursor carrying a different payload is not.
 
 The delivered-envelope fold already makes those distinctions executable. The
-sealed scenario layer now executes fault schedules, but does not yet issue or
-attribute replay requests; that requires an explicit policy contract rather
-than inference from cursor gaps.
+sealed scenario layer now executes and compares schedule-prefix pristine and
+faulted folds, but does not issue or attribute replay requests. The current IR
+has no request identity, attempt outcome, response attribution, or expiry
+record, so replay is never inferred from cursor gaps or an `origin` flag.
 
 ## v0.1 contract
 
@@ -52,7 +56,7 @@ The first release will provide:
 - deterministic drop, duplicate, reorder, and declared-boundary schedules;
 - replay recovery with explicit `exact`, `recovering`, and `unknown` states;
 - a convergence oracle against an unfaulted reference execution;
-- deterministic shrinking to a 1-minimal replayable witness under a recorded
+- deterministic shrinking to a 1-minimal re-executable witness under a recorded
   reduction order;
 - one version-pinned vLLM wire adapter backed by golden fixtures;
 - a static CPU-only CLI and machine-readable reports.
@@ -75,7 +79,7 @@ bounded adapter ──► canonical envelopes ──► pristine reference fold
                               ├─► fault schedule        │
                               │         │               │
                               │         ▼               │
-                              └─► recovery fold ────────┤
+                              └─► faulted fold ─────────┤
                                         │              │
                                         ▼              ▼
                               certainty + diagnostics + convergence
@@ -120,11 +124,12 @@ Applied
 certainty=Exact frontier=Some(2) keys=3
 ```
 
-## Run deterministic fault materialization
+## Run fault materialization and convergence
 
 The Slice 4 example validates and normalizes the same owned records, seals the
-complete trace, applies duplicate and reorder actions, and folds the resulting
-stable occurrences without rehashing source payloads:
+complete trace, applies duplicate and reorder actions, folds the resulting
+stable occurrences without rehashing source payloads, and runs the first-class
+pristine/faulted comparison:
 
 ```bash
 cargo run --example fault_materialization
@@ -136,7 +141,11 @@ e0#0 Applied
 e1#0 Applied
 e1#1 Duplicate
 certainty=Exact frontier=Some(2) keys=3
+verdict=Converged pristine_deliveries=3 faulted_deliveries=4
 ```
+
+The test corpus also reaches `Diverged` and `Ineligible`; hard state-fold
+failures remain typed errors and are never converted into verdicts.
 
 The release gate builds a static Linux x86-64 binary explicitly:
 
@@ -157,16 +166,17 @@ coordinated assembler exposes numeric fault plans only after successful EOF and
 binds them to the exact owned records normalized in the same session. Its
 indexed linked-list executor retains drop tombstones, inserts stable duplicate
 blocks, and reorders in bounded memory; a property test compares it with a slow
-vector reference model. State tests cover deterministic transitions,
-equivocation, modeled gap exhaustion, clear-barrier recovery, and atomic
-rollback on hard failure.
+vector reference model. Fresh schedule-prefix pristine and faulted folds now
+produce fail-closed per-stream convergence verdicts. State tests cover
+deterministic transitions, equivocation, modeled gap exhaustion, clear-barrier
+recovery, and atomic rollback on hard failure.
 
 | Slice | Status | Deliverable | Evidence gate |
 |---|---|---|---|
 | 1 | implemented | Charter, IR, threat model, static CLI | format, lint, test, release build |
 | 2 | implemented | Bounded IR ingestion and trace validation | golden vectors and adversarial limits |
 | 3 | implemented | Tri-state delivered-envelope fold | state-machine and property tests |
-| 4 | in progress | Sealed fault plans, materialization, replay, and oracle | faulted/pristine convergence corpus |
+| 4 | in progress | Plans, materialization, and per-stream oracle implemented; replay pending | faulted/pristine convergence corpus |
 | 5 | planned | Witness reducer and report CLI | deterministic 1-minimal regressions |
 | 6 | planned | Pinned vLLM adapter | upstream-derived fixtures and differential tests |
 | 7 | planned | v0.1 reproducibility release | end-to-end demo and compatibility matrix |
@@ -184,8 +194,8 @@ fixtures exist.
 - Raw token IDs are omitted or keyed-digested by default. An unkeyed digest is
   labeled as linkable pseudonymization, not confidentiality.
 - The core has no network listener, dynamic plugin loading, or engine import.
-- Future verdicts will identify whether they came from observed data, a modeled
-  fault, or a recovery assumption.
+- The current oracle never turns incomplete evidence into divergence: an
+  inexact side or frontier mismatch is `Ineligible`.
 
 See [the semantics](spec/semantics.md) and [threat model](docs/threat-model.md)
 for the rules behind those constraints.

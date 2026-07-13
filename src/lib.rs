@@ -4,8 +4,9 @@
 //! canonical JSONL ingestion, incremental trace validation, internal
 //! non-exported semantic fingerprinting, and a bounded per-stream
 //! delivered-envelope fold. Coordinated EOF sealing now produces opaque,
-//! numeric fault plans and deterministically materializes their delivery order;
-//! replay orchestration, convergence, reduction, reports, and engine adapters
+//! numeric fault plans, deterministically materializes their delivery order,
+//! and compares pristine and faulted folds with fail-closed convergence
+//! eligibility. Replay orchestration, reduction, reports, and engine adapters
 //! remain later layers.
 
 use serde::Serialize;
@@ -23,7 +24,7 @@ pub mod trace;
 /// Canonical trace format targeted by the first release.
 pub const TRACE_FORMAT_VERSION: &str = "kvcrucible.trace/v1alpha1";
 
-const IMPLEMENTED_CAPABILITIES: [&str; 7] = [
+const IMPLEMENTED_CAPABILITIES: [&str; 8] = [
     "bounded canonical JSONL ingestion and structural validation",
     "internal session-bounded semantic envelope fingerprints",
     "publisher-local cursor and epoch accounting",
@@ -31,11 +32,11 @@ const IMPLEMENTED_CAPABILITIES: [&str; 7] = [
     "atomic scoped cache-view projection with modeled gap exhaustion",
     "coordinated EOF sealing with opaque numeric fault plans",
     "deterministic bounded drop, duplicate, and reorder materialization",
+    "schedule-prefix pristine/faulted execution with eligibility-aware per-stream convergence",
 ];
 
-const PLANNED_V0_1_CAPABILITIES: [&str; 4] = [
-    "bounded replay policy over explicit observed evidence",
-    "convergence checks against a pristine reference execution",
+const PLANNED_V0_1_CAPABILITIES: [&str; 3] = [
+    "bounded replay request, outcome, response-attribution, and expiry orchestration",
     "deterministic 1-minimal witnesses for failed checks",
     "stable reports and one pinned vLLM adapter",
 ];
@@ -71,7 +72,7 @@ impl Contract {
     pub const fn v0_1() -> Self {
         Self {
             project: "KVCrucible",
-            status: "deterministic fault materialization implemented; replay, convergence, reduction, reports, and engine adapter pending",
+            status: "fault materialization and eligibility-aware convergence implemented; replay orchestration, reduction, reports, and engine adapter pending",
             trace_format: TRACE_FORMAT_VERSION,
             implemented_capabilities: &IMPLEMENTED_CAPABILITIES,
             planned_v0_1_capabilities: &PLANNED_V0_1_CAPABILITIES,
@@ -110,9 +111,12 @@ mod tests {
         );
         assert!(
             contract
-                .planned_v0_1_capabilities
-                .contains(&"convergence checks against a pristine reference execution")
+                .implemented_capabilities
+                .contains(&"schedule-prefix pristine/faulted execution with eligibility-aware per-stream convergence")
         );
+        assert!(contract.planned_v0_1_capabilities.contains(
+            &"bounded replay request, outcome, response-attribution, and expiry orchestration"
+        ));
         assert!(
             contract
                 .non_goals

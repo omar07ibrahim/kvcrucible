@@ -8,7 +8,7 @@ use kvcrucible::{
     ir::Record,
     jsonl::{JsonlReader, LocatedRecord},
     limits::Limits,
-    scenario::TraceAssembler,
+    scenario::{ConvergenceVerdict, TraceAssembler},
     state::{BaselineAuthority, Certainty},
 };
 
@@ -63,6 +63,18 @@ fn main() -> Result<(), Box<dyn Error>> {
         summary.certainty(),
         summary.frontier(),
         summary.cache_view().key_count()
+    );
+
+    let comparison = sealed.compare_schedule(0)?;
+    let verdict = comparison
+        .stream(0)
+        .expect("the synthetic trace declares one visible stream")
+        .verdict();
+    assert_eq!(verdict, ConvergenceVerdict::Converged);
+    println!(
+        "verdict={verdict:?} pristine_deliveries={} faulted_deliveries={}",
+        comparison.pristine().delivery_count(),
+        comparison.faulted().delivery_count()
     );
 
     Ok(())

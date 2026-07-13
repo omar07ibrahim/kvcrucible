@@ -56,6 +56,14 @@ responses, and engine-specific extension fields. They may try to:
 - The CLI opens no socket and invokes no command from trace content.
 - Diagnostic accumulation is bounded and records when increments were
   suppressed or clamped.
+- Schedule records snapshot both visible stream and physical-source prefixes;
+  materialization rejects an internal source-to-stream route outside that
+  snapshot before execution.
+- The convergence oracle requires both sides to be exact and authoritative,
+  with no active unknown reason or pending evidence and with equal frontiers,
+  before cache-view inequality can mean `Diverged`.
+- Hard state-fold failures remain redacted typed errors with an execution side
+  and stream ordinal; they are never converted into a convergence verdict.
 - The Rust crate forbids `unsafe` code.
 
 Initial default ceilings are centralized in `Limits` and boundary-tested by the
@@ -68,8 +76,6 @@ materialization work are also bounded by `Limits`.
 ## Planned v0.1 controls
 
 - The replay controller will separately bound requests, attempts, and expiry.
-- The convergence oracle will reject comparisons whose state or frontier is
-  ineligible.
 - Reducer output will be re-executed before it is accepted as a witness.
 - Reports will carry every relevant limit and truncation flag so that changing
   a bound cannot silently change a verdict.
