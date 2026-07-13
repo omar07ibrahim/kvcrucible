@@ -360,6 +360,10 @@ mod tests {
 
     const HEADER: &str = r#"{"kind":"trace_header","format":"kvcrucible.trace/v1alpha1","trace_id":"t","redaction":"omitted","created_by":"c","extensions":{}}"#;
 
+    #[expect(
+        clippy::large_types_passed_by_value,
+        reason = "test helper mirrors the public owned-limits constructor"
+    )]
     fn reader(
         input: &[u8],
         capacity: usize,

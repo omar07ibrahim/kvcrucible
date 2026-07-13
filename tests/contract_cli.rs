@@ -16,14 +16,20 @@ fn json_contract_is_a_stable_cli_boundary() {
         serde_json::from_slice(&output.stdout).expect("contract output should be JSON");
     let expected = json!({
         "project": "KVCrucible",
-        "status": "contract-first prototype; no engine adapter is implemented yet",
+        "status": "delivered-envelope fold implemented; orchestration, convergence, reduction, reports, and engine adapter pending",
         "trace_format": "kvcrucible.trace/v1alpha1",
-        "guarantees": [
+        "implemented_capabilities": [
+            "bounded canonical JSONL ingestion and structural validation",
+            "internal session-bounded semantic envelope fingerprints",
             "publisher-local cursor and epoch accounting",
-            "explicit exact, recovering, and unknown consumer states",
-            "deterministic fault replay from a canonical trace",
+            "bounded exact, recovering, and unknown delivered-envelope states",
+            "atomic scoped cache-view projection with modeled gap exhaustion"
+        ],
+        "planned_v0_1_capabilities": [
+            "deterministic fault schedules and bounded replay policy",
             "convergence checks against a pristine reference execution",
-            "deterministic 1-minimal witnesses for failed checks"
+            "deterministic 1-minimal witnesses for failed checks",
+            "stable reports and one pinned vLLM adapter"
         ],
         "non_goals": [
             "proving a serving engine correct",

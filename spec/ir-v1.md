@@ -1,7 +1,9 @@
 # KVCrucible trace IR `v1alpha1`
 
-Status: typed IR, bounded streaming codec, and incremental trace-wide structural
-validation implemented; cache-view folding pending.
+Status: typed IR, bounded streaming codec, incremental trace-wide structural
+validation, internal non-exported semantic fingerprinting, and the
+delivered-envelope cache-view fold are implemented. Fault-schedule execution
+and replay orchestration are pending.
 
 The trace IR records two independent facts:
 
@@ -82,18 +84,27 @@ identity components because one publisher may aggregate events from several
 tensor-parallel workers and those fields describe evidence rather than the
 publisher incarnation.
 
-Supported baseline declarations are:
+Supported raw baseline declarations are:
 
-- `empty_at_engine_start` — trusted capture provenance says the publisher cache
-  began empty before `initial_cursor`;
+- `empty_at_engine_start` — the trace claims the publisher cache began empty
+  before `initial_cursor`;
 - `unknown_at_attach` — the capture joined a running publisher and cannot claim a
   complete initial view.
 
+A raw `empty_at_engine_start` value is not sufficient to make the fold exact.
+The caller must separately supply `BaselineAuthority::TrustDeclaredEmpty` from a
+pinned adapter, verified capture boundary, or synthetic fixture. It may instead
+apply `TreatAsUnknown` to any declaration. Untrusted input cannot grant itself
+baseline authority.
+
 `initial_cursor` is the first valid cursor for this publisher and is encoded as
 an unsigned decimal string with no leading zero unless its value is exactly
-zero. Adapters preserve the upstream cursor domain; they do not silently
-normalize a one-based source to zero. An adapter may never infer
-`empty_at_engine_start` solely from the first observed cursor value.
+zero. It may be nonzero. The v1alpha1 fold requires a dense cursor domain: after
+`n`, the only contiguous successor is `n + 1`, and `u64::MAX` is terminal.
+Adapters preserve a compatible upstream domain and starting offset; they do not
+normalize a one-based source to zero. A sparse or incompatible source must be
+rejected or mapped by a new documented IR version, never silently renumbered.
+An adapter may not infer `empty_at_engine_start` from the first cursor value.
 
 The epoch is supplied by the capture boundary. It is not inferred from an
 opaque engine payload. A process restart that can reset its cursor requires a
@@ -126,17 +137,23 @@ Every `envelope_id` is unique within a trace. Reusing one is a structural error,
 even if the cursor and mutation payload match.
 
 The trace does not supply a trusted payload digest. After bounded decoding,
-KVCrucible computes an internal `sha256:` fingerprint over the RFC 8785 bytes of
-the complete normalized `mutations` array. A duplicate/equivocation check uses
-that recomputed value. Capture timing and top-level `extensions` are excluded;
-validated mutation metadata is included. A claimed digest from an engine wire
-format is retained only as non-authoritative adapter evidence.
+KVCrucible computes an internal, non-exported SHA-256 digest over the RFC 8785
+bytes of the complete normalized `mutations` array. A duplicate/equivocation
+check uses that recomputed value. Envelope ID, stream ID, cursor, origin, capture
+timing, and top-level `extensions` are excluded; validated mutation metadata is
+included. The digest has no serialized or displayable `sha256:` form. A claimed
+digest from an engine wire format is only non-authoritative adapter evidence.
 
 An envelope cursor cannot be below its stream's declared `initial_cursor`.
 Beyond that lower bound, structural validation does not require monotonic
 record order: live and replay envelopes can be interleaved. The cursor is not
 globally comparable. Two streams may legally emit the same cursor, advance at
 different rates, or contain different cache sets.
+
+Structural validation intentionally permits multiple envelopes for the same
+stream and cursor when their IDs are unique. The delivered-envelope state layer,
+not the structural layer, classifies equal mutation payloads as duplicates and
+different payloads as equivocation.
 
 ## Opaque cache hashes
 
@@ -261,7 +278,9 @@ operation has no group or medium selector in v1alpha1.
 
 ## Fault schedule
 
-Faults are stored separately from the captured envelopes:
+Faults are stored separately from the captured envelopes. Their structure and
+references are validated today; materializing their delivery order and replay
+responses belongs to the pending orchestration layer.
 
 ```json
 {

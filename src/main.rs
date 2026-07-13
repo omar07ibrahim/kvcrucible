@@ -16,7 +16,7 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Print the versioned v0.1 scope and its explicit non-goals.
+    /// Print implemented capabilities, the v0.1 plan, and explicit non-goals.
     Contract {
         /// Select human-readable text or stable JSON output.
         #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
@@ -54,9 +54,13 @@ fn print_contract(format: OutputFormat) -> ExitCode {
             println!("{}", contract.project);
             println!("status: {}", contract.status);
             println!("trace format: {}", contract.trace_format);
-            println!("\nguarantees:");
-            for guarantee in contract.guarantees {
-                println!("  - {guarantee}");
+            println!("\nimplemented capabilities:");
+            for capability in contract.implemented_capabilities {
+                println!("  - {capability}");
+            }
+            println!("\nplanned v0.1 capabilities:");
+            for capability in contract.planned_v0_1_capabilities {
+                println!("  - {capability}");
             }
             println!("\nnon-goals:");
             for non_goal in contract.non_goals {

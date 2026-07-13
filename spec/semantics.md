@@ -1,190 +1,254 @@
 # Replay and certainty semantics
 
-Status: design contract; state machine not yet implemented.
+Status: bounded internal semantic fingerprinting and the delivered-envelope
+state fold are implemented. Fault-schedule execution, replay requests and
+expiry, pristine/faulted orchestration, convergence, reduction, and reports
+remain v0.1 contracts for later slices.
+
+## Current execution boundary
+
+The current fold consumes already delivered envelopes in admission order. It
+does not decide which envelopes are dropped, reordered, duplicated, or replayed.
+The envelope `origin` and stable ID remain bounded evidence for the future
+orchestrator; `origin` does not change cache-mutation semantics.
+
+One physical source trace uses one `TraceValidator` and one
+`EnvelopeNormalizer` under the same `Limits`:
+
+1. acquire an untrusted physical JSONL trace through `JsonlReader`, which bounds
+   per-line bytes, cumulative trace bytes, and physical record count;
+2. push it into the incremental `TraceValidator` before it contributes to state;
+3. register accepted stream declarations with an external baseline authority;
+4. normalize every accepted physical source envelope exactly once with
+   `prepare` and share that immutable value with delivered folds;
+5. at EOF, require `TraceValidator::finish`, then consume the normalizer with
+   `seal`; and
+6. finalize each stream state with the matching seal.
+
+State accumulated before a later structural failure is not an admissible
+result. The validator enforces header order, declaration order, redaction,
+global identity uniqueness, and fault references; the normalizer is not a
+replacement for it.
+
+`decode_line` is a one-record primitive. A caller using it directly must supply
+an outer framing layer that independently enforces cumulative trace bytes and
+physical record count; it does not replace `JsonlReader` for untrusted files.
+
+The one-session-per-physical-trace rule binds cumulative fingerprint work,
+stream and envelope counts, unique envelope IDs, immutable stream contracts,
+and retained identity bytes to the trace. Prepared envelopes and seals from a
+different session are rejected. A `prepare` failure makes its normalization
+session sticky-failed. A hard `admit` failure makes that constructed stream state
+sticky-failed. Constructor errors, such as a baseline-authority mismatch, return
+before a stream state exists.
 
 ## Consumer state
 
-Each declared publisher stream owns an independent consumer state:
+Each declared publisher stream owns an independent state:
 
 ```text
 certainty: exact | recovering | unknown
-frontier: last contiguous cursor, if any
-cache_view: set of canonical cache keys
-pending: bounded out-of-order envelopes
-recent_fingerprints: bounded cursor-to-fingerprint window
-diagnostics: bounded counters and evidence
+frontier: last applied dense cursor, if any
+cache_view: bounded set of canonical cache keys
+pending: bounded out-of-order or conflicted cursor slots
+recent_fingerprints: bounded applied-cursor fingerprint window
+unknown_reasons: baseline | equivocation | unavailable_gap
+final-only reason: unclosed_gap
+diagnostics: bounded historical counters
 ```
 
-No operation compares cursors or cache equality across distinct streams.
+No cursor comparison crosses stream or epoch scope. Cache-view equality also
+includes the complete canonical stream scope, so snapshots from distinct
+publishers cannot compare equal merely because they contain the same hashes.
 
-## Initialization
+## Initialization and cursor domain
 
-An `empty_at_engine_start` baseline begins `exact` with an empty cache view and
-expects the declared `initial_cursor`. An `unknown_at_attach` baseline begins
-`unknown`; later events may build a partial view but cannot retroactively prove
-the missing prefix of history.
+The raw baseline declaration is evidence, not authority. `TrustDeclaredEmpty`
+may be supplied only when a pinned adapter, capture boundary, or synthetic
+fixture independently establishes an `empty_at_engine_start` declaration. It
+starts an `exact`, empty view. `TreatAsUnknown` starts `unknown` regardless of
+the raw declaration. An `unknown_at_attach` declaration can never be promoted
+to trusted empty.
 
-An explicit authoritative snapshot can change that rule in a future format.
-Snapshot semantics are not part of v1alpha1.
+The fold requires a dense unit-step cursor domain inside one stream and epoch.
+`initial_cursor` is the first valid cursor and may be nonzero. After cursor `n`,
+the only contiguous successor is `n + 1`; `u64::MAX` is terminal. An adapter for
+a sparse or otherwise incompatible source must reject that source or define a
+new versioned IR mapping. It must not silently renumber observations.
 
-A publisher-scoped `clear` is already part of v1alpha1 and acts as an
-authoritative membership barrier. Its recovery behavior is defined below; it is
-not a general snapshot.
+An unknown-baseline state applies its first accepted envelope as a partial
+frontier and may fold a contiguous suffix. That view is not authoritative until
+a valid forward clear establishes a membership anchor.
 
-An unknown-at-attach consumer treats its first accepted envelope as a partial
-frontier and can fold later contiguous envelopes into a non-authoritative view.
-Gaps and reordering remain bounded exactly as they are for an exact consumer,
-but filling them does not repair the unknown history that predates attachment.
+## Semantic fingerprinting
+
+KVCrucible recomputes an internal, non-exported SHA-256 digest over the RFC 8785
+canonical bytes of the complete normalized `mutations` array. It never trusts
+an input digest. Envelope ID, stream ID, cursor, origin, and top-level extensions
+are excluded; validated fields inside mutations are included. The digest has no
+public textual representation, serialization, formatting, or report form.
+
+Canonical bytes are streamed into the hash under both a per-envelope ceiling
+and the normalizer session's cumulative fingerprint-work ceiling. A prepared
+envelope is compact: it retains the ID and origin evidence, delivery facts,
+mutations, internal digest, and charged byte count, but not top-level extensions.
+
+The applied fingerprint window contains at most
+`max_recent_fingerprints_per_stream` cursors. It covers applied cursors only;
+pending candidates have a separate bounded ledger. A zero-sized window is
+valid. When the window overflows, the lowest retained cursor is evicted.
+Draining a pending candidate transfers its fingerprint into the applied window.
 
 ## Contiguous delivery
 
-For an exact stream with frontier `n`, cursor `n + 1` is applied in mutation
-order and advances the frontier. The declared `initial_cursor` is the first
-contiguous envelope for an empty baseline. Cursor addition is checked for
-unsigned overflow.
+For a trusted-empty baseline, the first expected cursor is `initial_cursor`. An
+unknown baseline instead accepts any first cursor at or above that bound as a
+partial frontier. Thereafter, an envelope at the checked successor of the
+frontier is applied in mutation order. Application may also drain the contiguous
+clean pending suffix. The entire cache projection is planned against an overlay
+and committed atomically: a hard cache-resource or accounting failure changes
+neither the view, frontier, pending ledger, recent fingerprints, nor diagnostics.
 
-The fold is deterministic: identical state and normalized envelope values
-produce identical state and diagnostics.
+The deterministic result of admitting one delivery is a modeled disposition:
+`Applied`, `BarrierApplied`, `Buffered`, `Duplicate`, `Equivocation`,
+`StaleUnverifiable`, `StaleBarrier`, `PendingLimit`, `GapLimit`, or
+`UnverifiableGap`. Duplicate, equivocation, stale delivery, and modeled gap-limit
+outcomes are not hard API errors. Hard errors are reserved for validation,
+session or stream misuse, stack-safety, checked accounting, and cache-resource
+failures; they fail the affected normalizer or stream closed.
 
 ## Duplicate and equivocation
 
-KVCrucible recomputes a semantic fingerprint from the normalized mutation
-payload; it never trusts a digest declared by trace input. For cursors retained
-in `recent_fingerprints`, redelivery with the same fingerprint is an idempotent
-duplicate. It changes neither the cache view nor the frontier.
+For an applied cursor still in the recent window, the same semantic fingerprint
+is an idempotent duplicate. A different fingerprint is equivocation: the
+redelivery is not applied, the current view becomes non-authoritative, and
+certainty becomes `unknown`. The recent slot retains the first two distinct
+internal digests. Repeating either known variant is a duplicate; every new
+variant is another equivocation without growing the slot.
 
-The same retained cursor with a different fingerprint is equivocation. It is a
-hard protocol error because the consumer cannot establish which history is
-authoritative. The witness retains both internal fingerprints while respecting
-report redaction.
+The same rules apply to a retained pending cursor, except that no conflicting
+payload is chosen. On the first conflict, the candidate payload and its pending
+canonical-byte charge are released and the slot retains only the first two
+internal digests. The slot stays count-bounded. Known variants are
+duplicates; later new variants are equivocations.
 
-On equivocation, the conflicting redelivery is never applied. If one payload was
-already applied, that first-path view is retained only as a non-authoritative
-partial view; if both payloads were pending, neither is chosen for authoritative
-application. In either case certainty becomes `unknown`, buffered envelopes stay
-bounded and non-authoritative, and convergence is ineligible until a later
-forward clear barrier makes the conflict irrelevant to current membership. The
-historical diagnostic remains in the report after such recovery.
+An envelope at or below the frontier with no retained fingerprint is never
+re-applied. It is `StaleUnverifiable`, or `StaleBarrier` if it contains a clear.
+The configured recent-window size therefore defines the exact duplicate and
+equivocation coverage claim.
 
-Fingerprint history has a configured cursor-count ceiling. A redelivery older
-than the retained window is ignored as `stale_unverifiable`: it is neither
-re-applied nor classified as a duplicate/equivocation. Reports must state the
-window and cannot claim equivocation coverage outside it. This rule keeps the
-state bound explicit instead of hiding an unbounded digest ledger.
+Active uncertainty and historical diagnostics are separate. A later clear may
+make an old conflict irrelevant to current membership and restore authority,
+but it never erases the historical equivocation counter.
 
-More generally, an envelope at or below the current frontier with no retained
-fingerprint is never applied. This also covers a previously unseen late cursor
-after unknown-at-attach established a higher partial frontier. It is reported as
-`stale_unverifiable`; if it contains a clear, the more specific diagnostic is
-`stale_barrier`.
+## Gaps and modeled exhaustion
 
-## Gaps and reordering
+An envelope above the next expected cursor is buffered when all three modeled
+bounds permit it:
 
-If an exact stream at frontier `n` receives cursor greater than `n + 1`, the
-consumer enters `recovering`. The out-of-order envelope may be held only inside
-a configured bound. Cache mutations beyond the gap are not authoritative until
-the interval is closed.
+- pending cursor-slot count;
+- canonical bytes held by clean pending candidates; and
+- numeric distance from the next expected cursor.
 
-Either delayed live delivery or replay may supply a missing cursor. Once every
-cursor in the interval has a consistent recomputed fingerprint and the
-contiguous frontier reaches the buffered envelopes, the consumer returns to
-`exact` and applies each mutation exactly once. `origin` remains evidence about
-delivery, not a different cache-mutation semantics.
+A clean open gap makes an otherwise authoritative state `recovering`. Filling
+every missing dense cursor applies each candidate once and returns the state to
+`exact`. At source EOF, `finish` converts a retained unclosed gap to `unknown`
+and records the active `unclosed_gap` reason.
 
-If replay has expired, exceeds its attempt bound, contradicts an observed
-fingerprint, or cannot close the full interval, the consumer becomes `unknown`.
-It may continue tracking a bounded partial view and cursor evidence, but it must
-not emit an exact-cache verdict from that view.
+If count, byte, or span capacity rejects evidence, the delivery receives
+`PendingLimit` or `GapLimit` rather than a hard error. The state records a
+conservative unavailable horizon beginning at the lowest discarded cursor. A
+non-clear delivery at or above that floor cannot be verified and extends the
+horizon's observed ceiling; it receives `UnverifiableGap`. A clear inside the
+inclusive floor-to-ceiling range cannot supersede the discarded evidence. A
+clear below the floor may anchor an earlier partial prefix, but the higher
+unavailable horizon keeps the overall certainty `unknown`. Full recovery from
+this reason requires a clear strictly above its current ceiling.
 
-While `recovering` or `unknown`, an accepted, non-equivocated `clear` makes all
-mutations ordered before that operation irrelevant to current membership. A
-barrier is eligible only when its cursor is greater than the current partial
-frontier, or when no frontier exists and it is the first accepted envelope. A
-clear at or below the partial frontier is ignored as `stale_barrier`; v0.1 does
-not retain and replay an arbitrarily old applied suffix.
+This horizon deliberately represents an unverifiable suffix, not a closed
+interval. It prevents a later delivery from appearing contiguous merely because
+the evidence that preceded it was discarded to remain bounded.
 
-For an eligible barrier, the fold discards the prior partial view and every
-buffered envelope at or below the barrier cursor, applies the `clear` and any
-later mutations in the same envelope, sets that cursor as the frontier, and
-returns to `exact`. If the envelope contains mutations before `clear`, they are
-ignored for the post-barrier view. Buffered envelopes above the new frontier are
-then handled by the ordinary contiguous/gap rules. This transition is valid
-only for a clear scoped to the same publisher stream; it does not repair another
-stream.
+## Clear barriers
+
+A clear in ordinary contiguous delivery while the stream is exact is an
+ordinary `Applied` envelope. All mutations execute in order, including any
+prefix before the clear, and their diagnostics count. The clear's final cache
+effect still removes earlier membership.
+
+A forward clear becomes a recovery barrier when the stream is `recovering` or
+`unknown`, or when an exact stream receives a clear beyond its next expected
+cursor. A barrier must be above the current frontier. Barrier application:
+
+1. ignores mutations before the envelope's first clear;
+2. applies that clear and its mutation suffix;
+3. discards pending and recent evidence at or below the barrier cursor;
+4. establishes an authoritative view and frontier at that cursor; and
+5. drains any clean contiguous pending suffix above it.
+
+The transition is publisher-scoped. It cannot repair another stream. Active
+equivocation or unavailable evidence above the barrier remains relevant, and a
+higher conflicted pending slot remains unresolved. Consequently a barrier does
+not promise `exact`: it restores `exact` only when no higher active poison or
+gap remains. Historical counters remain visible in all cases.
+
+## Cache mutation fold
+
+- `store_run` inserts each canonical key idempotently;
+- `remove` deletes each present key;
+- a missing remove increments a bounded exact-view or partial-view diagnostic;
+- `clear` removes every key in the publishing stream's scope;
+- missing lineage does not invalidate a store;
+- repeated stores do not imply repeated physical allocation; and
+- removals do not imply physical memory release.
+
+The view is bounded by cache-key count and variable identity bytes. Metadata
+outside canonical cache identity cannot split or merge keys.
 
 ## Restart boundaries
 
 Cursor reset is legal only across a new externally declared epoch. A lower
-cursor in the same epoch is handled by retained duplicate/equivocation or
-`stale_unverifiable` rules, not as an automatically detected restart.
+cursor in the same epoch follows retained duplicate/equivocation or stale rules;
+it is never treated as an automatically detected restart. Fault schedules may
+eventually alter delivery around a declared boundary, but may not invent an
+epoch or producer incarnation.
 
-This rule is intentional: vLLM event payloads do not provide enough information
-to distinguish every restart from delayed delivery. Fault schedules may alter
-delivery around an epoch boundary already present in the trace; they never
-synthesize an epoch or producer incarnation.
+## Future replay and convergence contract
 
-## Cache mutation fold
+Slice 4 will execute deterministic fault schedules, issue bounded replay
+requests, model attempt exhaustion and expiry, and run both pristine and faulted
+folds. Occurrence zero must preserve physical trace order; the orchestrator may
+not silently sort envelopes by cursor.
 
-- `store_run` inserts every canonical key idempotently.
-- `remove` deletes every present canonical key. Missing keys increment a bounded
-  diagnostic counter but are not a correctness failure.
-- `clear` deletes every key in the publishing stream's scope and may establish
-  an authoritative barrier as described above.
-- a missing parent does not invalidate a store;
-- repeated stores do not imply repeated physical allocation;
-- removals do not imply physical memory release.
+A future convergence check is eligible only when the faulted state is `exact`
+at the same logical frontier as the pristine state. It passes only when their
+same-scope canonical cache views are equal and no active unknown reason remains.
+An `unknown` state is ineligible, not automatically non-convergent. Historical
+diagnostics remain reportable after membership recovery.
 
-Metadata that does not participate in canonical cache identity cannot split or
-merge keys.
+## Future witness contract
 
-## Convergence oracle
-
-For one canonical input trace, KVCrucible computes:
-
-1. a pristine fold with original contiguous delivery; and
-2. a faulted fold with the declared schedule and replay responses.
-
-A convergence check is eligible only when the faulted consumer returns to
-`exact` at the same logical frontier as the pristine consumer. It passes when
-their canonical cache views are equal and no hard protocol error remains
-relevant after the most recent accepted barrier. Historical errors remain
-visible even when their membership impact has been superseded.
-
-An `unknown` consumer is not “non-convergent.” It is ineligible for an exact
-comparison, and the report must say why. This prevents missing telemetry from
-being mislabeled as an engine cache bug.
-
-Convergence is publisher-local. Different publishers and workers are expected
-to cache different prefixes.
-
-## Witness preservation
-
-A reduced witness is valid only if replaying it under the same limits preserves:
+Slice 5 will accept a reduced witness only when re-execution under identical
+limits preserves:
 
 - the check identifier;
 - the pass, fail, or ineligible verdict;
 - the primary diagnostic category;
-- the relevant stream identity and epoch;
+- the relevant stream identity and epoch; and
 - the redaction policy.
 
 Reduction may remove unrelated streams, envelopes, mutations, hashes, metadata,
 and fault actions. Stable envelope IDs and occurrence numbers keep surviving
-fault targets fixed. A reducer may remove a dangling action with its target but
-may not retarget it by ordinal, synthesize events, renumber cursors, change
-mutation payloads, or replace an unknown baseline with an empty one.
+targets fixed. A reducer may remove a dangling action with its target but may
+not retarget it by ordinal, synthesize events, renumber cursors, change mutation
+payloads, or replace an unknown baseline with an empty one.
 
-The v0.1 reducer seeks **1-minimality under a recorded deterministic reduction
-order**: no single remaining candidate unit in that order can be removed while
-preserving the witness predicate. It does not claim a globally shortest trace.
+The v0.1 target is 1-minimality under a recorded deterministic reduction order,
+not a globally shortest trace.
 
 ## Reporting language
 
-Reports distinguish:
-
-- **observed** facts decoded from a trace;
-- **modeled** delivery faults and recovery responses;
-- **derived** state transitions and comparisons;
-- **unknown** facts that the trace cannot establish.
-
-The terms “proof” and “exhaustive” may be used only with the exact bounded model,
-limits, and schedule space recorded in the report.
+Future reports distinguish observed trace facts, modeled delivery faults,
+derived state transitions, and facts left unknown by the trace. The terms
+“proof” and “exhaustive” are valid only with the exact bounded model, limits,
+and explored schedule space recorded beside the result.

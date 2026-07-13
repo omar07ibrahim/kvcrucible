@@ -7,9 +7,14 @@ publisher-local, bounded-replay event stream, under which observable conditions
 may it call its view exact, and which fault schedule is sufficient to disprove
 that claim?
 
-KVCrucible answers that narrow question with an executable state model. Its
-output is a verdict about a consumer reconstruction, not a verdict about the
-serving engine that produced the events.
+KVCrucible answers that narrow question with an executable state model. The
+current API returns delivery dispositions and a finalized stream summary; the
+v0.1 report will carry a verdict about consumer reconstruction, never a verdict
+about the serving engine that produced the events.
+
+The delivered-envelope state model is implemented. Fault scheduling,
+replay-attempt and expiry policies, convergence, reduction, reporting, and the
+pinned engine adapter remain later v0.1 slices.
 
 ## Scope of v0.1
 
@@ -57,14 +62,16 @@ Trusted:
 - the KVCrucible binary identified by its build metadata;
 - the selected invariant definitions and declared input limits;
 - the pristine reference fold for the same canonical trace;
-- explicit capture metadata that marks baselines and epoch boundaries.
+- the external `BaselineAuthority` decision supplied by a pinned adapter,
+  verified capture boundary, or synthetic fixture; and
+- explicit capture metadata that marks epoch boundaries.
 
 Untrusted:
 
 - JSONL and future MessagePack input;
 - cache hashes, token metadata, adapter metadata, and diagnostic text;
 - producer timing and delivery order;
-- claims that a trace begins at engine startup;
+- raw claims that a trace begins at engine startup or has an empty baseline;
 - engine-specific fields not validated by a pinned adapter.
 
 The consumer cannot recover information that was neither observed nor present

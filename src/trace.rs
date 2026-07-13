@@ -933,6 +933,10 @@ mod tests {
         )
     }
 
+    #[expect(
+        clippy::large_types_passed_by_value,
+        reason = "test helper mirrors the public owned-limits constructor"
+    )]
     fn with_header(limits: Limits, redaction: RedactionMode) -> TraceValidator {
         let mut validator = TraceValidator::new(limits).expect("test limits must be supported");
         validator
@@ -1166,6 +1170,24 @@ mod tests {
         validator
             .push(&envelope("out-of-order", "s", 10, Vec::new()))
             .unwrap();
+    }
+
+    #[test]
+    fn structural_validation_preserves_same_cursor_conflicts_for_semantic_folding() {
+        let records = [
+            header(RedactionMode::Omitted),
+            stream("s", "a", 0, 0),
+            envelope("first", "s", 0, Vec::new()),
+            envelope(
+                "conflict",
+                "s",
+                0,
+                vec![store_with_evidence(EvidenceCase::None)],
+            ),
+        ];
+
+        let summary = validate_trace(&records, Limits::default()).unwrap();
+        assert_eq!(summary.envelopes(), 2);
     }
 
     #[test]

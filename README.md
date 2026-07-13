@@ -6,31 +6,37 @@ from unreliable event streams.
 Modern inference routers consume cache events to estimate which worker already
 holds a prompt prefix. That view can become subtly wrong when a consumer joins
 late, misses a bounded replay window, receives a duplicate, observes a restart,
-or mistakes a publisher-local sequence for a global one. KVCrucible turns those
-conditions into deterministic traces, explicit uncertainty, and replayable
-counterexamples.
+or mistakes a publisher-local sequence for a global one. KVCrucible already
+turns delivered traces into explicit, bounded uncertainty; the planned
+orchestrator will turn faulted executions into replayable counterexamples.
 
 This is not a serving engine, a throughput simulator, or a claim that vLLM or
 Dynamo is formally verified.
 
-> **Status:** contract-first prototype. The typed IR, bounded streaming canonical
-> JSONL codec, and incremental trace-wide structural validator are implemented;
-> the state model and production-engine adapter are still pending.
+> **Status:** the typed IR, bounded streaming canonical JSONL codec, incremental
+> structural validator, internal non-exported semantic fingerprinting, and
+> bounded tri-state cache-view fold are implemented. Fault/replay orchestration,
+> the convergence oracle, witness reduction, reports, and a production-engine
+> adapter are next.
 
 ## The problem
 
 A cache-event consumer has at least three materially different states:
 
-- **exact** — its view follows a declared baseline with no unresolved gap;
-- **recovering** — it has detected a gap and is waiting for bounded replay;
-- **unknown** — the missing history cannot be reconstructed safely.
+- **exact** — its view follows an externally trusted baseline or clear anchor
+  with no active gap, equivocation, or unavailable evidence;
+- **recovering** — it retains a bounded clean gap and awaits missing delivery;
+- **unknown** — missing or conflicting history prevents an authoritative
+  complete view.
 
 Collapsing those states into “healthy” or “failed” creates false confidence. A
 late subscriber may continue building a useful partial view, but it cannot
 truthfully call that view complete. A duplicate store may be harmless, while
 the same cursor carrying a different payload is not.
 
-KVCrucible is designed to make those distinctions executable.
+The delivered-envelope fold already makes those distinctions executable. It
+does not yet execute fault schedules or issue replay requests: those arrive with
+the orchestration layer in Slice 4.
 
 ## v0.1 contract
 
@@ -85,8 +91,28 @@ cargo run -- contract
 cargo run -- contract --format json
 ```
 
-The JSON form is intentionally suitable for CI assertions and future report
-metadata.
+The JSON form separates current capabilities from the remaining v0.1 plan. It
+is intentionally suitable for CI assertions and future report metadata.
+
+## Run the implemented fold
+
+Slice 3 is a library API, with a small executable example that exercises the
+complete current trust boundary:
+
+```bash
+cargo run --example delivered_fold
+```
+
+It decodes five bounded JSONL records, validates the complete trace, applies an
+out-of-order delivery sequence, seals the normalization session, and finalizes
+an exact three-key view:
+
+```text
+Applied
+Buffered
+Applied
+certainty=Exact frontier=Some(2) keys=3
+```
 
 The release gate builds a static Linux x86-64 binary explicitly:
 
@@ -99,21 +125,22 @@ never depends on that native build.
 
 ## Roadmap
 
-Slice 2 covers strict record decoding and encoding, bounded streaming JSONL
-framing, and trace-wide structural validation: duplicate decoded keys,
-non-integer numbers, unsafe integers, malformed UTF-8, structural budgets,
-physical-line bytes, trace bytes, record counts, ordering, identities, privacy
-evidence, and fault references are checked before state folding.
+Slices 1–3 are implemented. The current core strictly decodes and encodes the
+IR, validates a trace incrementally, fingerprints each normalized mutation list
+under a session-wide work budget, and folds already delivered envelopes into a
+bounded per-stream cache view. State tests cover deterministic transitions,
+equivocation, modeled gap exhaustion, clear-barrier recovery, and atomic
+rollback on hard failure.
 
-| Slice | Deliverable | Evidence gate |
-|---|---|---|
-| 1 | Charter, IR, threat model, static CLI | format, lint, test, release build |
-| 2 | Bounded IR ingestion and trace validation | golden vectors and adversarial limits |
-| 3 | Tri-state cache-view fold | state-machine and property tests |
-| 4 | Fault/replay schedules and oracle | faulted/pristine convergence corpus |
-| 5 | Witness reducer and report CLI | deterministic 1-minimal regressions |
-| 6 | Pinned vLLM adapter | upstream-derived fixtures and differential tests |
-| 7 | v0.1 reproducibility release | end-to-end demo and compatibility matrix |
+| Slice | Status | Deliverable | Evidence gate |
+|---|---|---|---|
+| 1 | implemented | Charter, IR, threat model, static CLI | format, lint, test, release build |
+| 2 | implemented | Bounded IR ingestion and trace validation | golden vectors and adversarial limits |
+| 3 | implemented | Tri-state delivered-envelope fold | state-machine and property tests |
+| 4 | next | Fault/replay schedules and oracle | faulted/pristine convergence corpus |
+| 5 | planned | Witness reducer and report CLI | deterministic 1-minimal regressions |
+| 6 | planned | Pinned vLLM adapter | upstream-derived fixtures and differential tests |
+| 7 | planned | v0.1 reproducibility release | end-to-end demo and compatibility matrix |
 
 Dynamo tree-dump recovery and cache-aware routing counterfactuals are v0.2
 work. They will not be advertised as supported before their adapters and
@@ -128,8 +155,8 @@ fixtures exist.
 - Raw token IDs are omitted or keyed-digested by default. An unkeyed digest is
   labeled as linkable pseudonymization, not confidentiality.
 - The core has no network listener, dynamic plugin loading, or engine import.
-- Every verdict identifies whether it came from observed data, a modeled fault,
-  or a recovery assumption.
+- Future verdicts will identify whether they came from observed data, a modeled
+  fault, or a recovery assumption.
 
 See [the semantics](spec/semantics.md) and [threat model](docs/threat-model.md)
 for the rules behind those constraints.
