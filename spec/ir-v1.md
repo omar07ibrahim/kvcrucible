@@ -1,6 +1,7 @@
 # KVCrucible trace IR `v1alpha1`
 
-Status: design contract; decoder not yet implemented.
+Status: typed IR and bounded per-record codec implemented; trace-wide validation
+pending.
 
 The trace IR records two independent facts:
 

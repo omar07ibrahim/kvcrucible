@@ -29,7 +29,8 @@ responses, and engine-specific extension fields. They may try to:
 
 ## Controls required by v0.1
 
-- A maximum encoded line size is enforced before JSON allocation.
+- A maximum encoded line size is enforced before JSON-tree allocation; the
+  bounded stream reader must also cap acquisition of the physical line.
 - JSON depth, strings, envelopes, mutations, hashes, metadata, buffered gaps,
   replay attempts, and emitted diagnostics have explicit ceilings.
 - Unknown fields follow a versioned policy; they are never executed.
@@ -44,9 +45,9 @@ responses, and engine-specific extension fields. They may try to:
 - Diagnostic accumulation is bounded and reports truncation explicitly.
 - The Rust crate forbids `unsafe` code.
 
-Initial default ceilings are part of the codec implementation slice, not this
-document. They will be centralized, testable, and printed in report metadata so
-that changing a bound cannot silently change a verdict.
+Initial default ceilings are centralized in `Limits` and boundary-tested by the
+codec. They will also be printed in report metadata so that changing a bound
+cannot silently change a verdict.
 
 ## Privacy posture
 

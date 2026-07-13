@@ -1,12 +1,15 @@
 //! Resource ceilings shared by trace decoding and semantic validation.
 
+/// Hard stack-safety ceiling for configured JSON depth.
+pub const MAX_JSON_DEPTH: usize = 64;
+
 /// Default limits are intentionally conservative enough for real event batches
 /// while keeping every single-record operation bounded.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Limits {
     /// Maximum JSON payload bytes accepted for one record, excluding newline.
     pub max_line_bytes: usize,
-    /// Maximum nested JSON value depth.
+    /// Maximum nested JSON value depth; values above [`MAX_JSON_DEPTH`] are invalid.
     pub max_depth: usize,
     /// Maximum scalar and container values in one record.
     pub max_values: usize,

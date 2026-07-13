@@ -1,10 +1,11 @@
 //! Public contract for `KVCrucible`.
 //!
-//! The crate exposes the reviewed scope contract and typed trace IR. Bounded
-//! decoding and replay are layered on only after those semantics are fixed.
+//! The crate exposes the reviewed scope contract, typed trace IR, and bounded
+//! canonical record codec. Trace-wide validation and replay remain later layers.
 
 use serde::Serialize;
 
+pub mod codec;
 pub mod ir;
 pub mod limits;
 

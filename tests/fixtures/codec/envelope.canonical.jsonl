@@ -1,0 +1,1 @@
+{"cursor":"0","envelope_id":"e","extensions":{},"kind":"envelope","mutations":[{"metadata":{"a":1,"b":2},"op":"clear"}],"origin":"live","stream_id":"s"}
