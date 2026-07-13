@@ -367,10 +367,6 @@ pub(crate) struct DeliveryKey {
 }
 
 /// One validated action with every trace identity resolved to a numeric key.
-#[allow(
-    dead_code,
-    reason = "the next linked-list materializer consumes the validated action fields"
-)]
 pub(crate) enum PlannedAction {
     Drop {
         target: DeliveryKey,
@@ -387,10 +383,6 @@ pub(crate) enum PlannedAction {
 }
 
 /// One independent schedule over the physical envelope prefix at its record.
-#[allow(
-    dead_code,
-    reason = "the next linked-list materializer consumes the validated action list"
-)]
 pub(crate) struct SchedulePlan {
     pub(crate) id: Arc<str>,
     pub(crate) prefix_len: usize,

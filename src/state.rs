@@ -278,6 +278,10 @@ impl PreparedEnvelope {
         self.origin
     }
 
+    pub(crate) fn stream_id(&self) -> &str {
+        self.stream_id.as_ref()
+    }
+
     fn cursor(&self) -> u64 {
         self.cursor
     }
