@@ -292,8 +292,8 @@ pub struct EnvelopeNormalizer {
     session: Arc<SessionMarker>,
     limits: Limits,
     fingerprint_bytes: u64,
-    streams: BTreeMap<Box<str>, RegisteredStream>,
-    scopes: BTreeMap<CacheScope, Box<str>>,
+    streams: BTreeMap<Arc<str>, Arc<RegisteredStream>>,
+    scopes: BTreeMap<Arc<CacheScope>, Arc<str>>,
     envelope_ids: BTreeSet<Arc<str>>,
     envelopes: u64,
     identity_bytes: u64,
@@ -310,6 +310,37 @@ const SESSION_FAILED: u8 = 2;
 /// Opaque proof that one normalization session reached EOF without failure.
 pub struct SealedSession {
     session: Arc<SessionMarker>,
+}
+
+/// Immutable, session-bound recipe for fresh states of one declared stream.
+///
+/// A blueprint freezes the external baseline-authority decision during source
+/// ingestion but retains no cache membership. It can therefore create pristine
+/// and faulted states sequentially after the complete source session is sealed.
+#[derive(Clone)]
+pub struct StreamBlueprint {
+    session: Arc<SessionMarker>,
+    limits: Limits,
+    registration: Arc<RegisteredStream>,
+}
+
+impl StreamBlueprint {
+    /// Create a fresh empty consumer state after the source session reaches EOF.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::SessionMismatch`] when the seal belongs to another
+    /// source session, or [`Error::NormalizerFailed`] unless the matching
+    /// session sealed successfully.
+    pub fn start(&self, sealed: &SealedSession) -> Result<StreamState, Error> {
+        if !Arc::ptr_eq(&self.session, &sealed.session) {
+            return Err(Error::SessionMismatch);
+        }
+        if self.session.status.load(Ordering::Acquire) != SESSION_SEALED {
+            return Err(Error::NormalizerFailed);
+        }
+        Ok(StreamState::from_blueprint(self))
+    }
 }
 
 impl EnvelopeNormalizer {
@@ -353,6 +384,49 @@ impl EnvelopeNormalizer {
             self.fail();
         }
         result
+    }
+
+    /// Register one immutable stream contract and its external trust decision.
+    ///
+    /// Repeating an identical registration returns another lightweight handle
+    /// to the same contract. The returned blueprint can create fresh states
+    /// after this normalizer is consumed by [`Self::seal`].
+    ///
+    /// # Errors
+    ///
+    /// Returns a stable error for a closed session, unsupported active limits,
+    /// a non-stream record, record validation, mismatched trusted-empty
+    /// authority, conflicting registration, duplicate canonical scope, or
+    /// session stream and identity budgets. A baseline-authority mismatch does
+    /// not poison the session because no contract was registered.
+    pub fn register_stream(
+        &mut self,
+        declaration: &ValidatedRecord,
+        authority: BaselineAuthority,
+    ) -> Result<StreamBlueprint, Error> {
+        if self.session.status.load(Ordering::Acquire) != SESSION_OPEN {
+            return Err(Error::NormalizerFailed);
+        }
+        validate_depth(&self.limits)?;
+        if let Err(error) = declaration.as_record().validate(&self.limits) {
+            self.fail();
+            return Err(Error::RecordValidation { error });
+        }
+        let Record::Stream(stream) = declaration.as_record() else {
+            self.fail();
+            return Err(Error::WrongRecordKind);
+        };
+        if authority == BaselineAuthority::TrustDeclaredEmpty
+            && stream.baseline != Baseline::EmptyAtEngineStart
+        {
+            return Err(Error::BaselineAuthorityMismatch);
+        }
+        let registration = self.bind_stream(stream, authority)?;
+        Ok(StreamBlueprint {
+            session: Arc::clone(&self.session),
+            limits: self.limits,
+            registration,
+        })
     }
 
     /// Consume this session at EOF and make its stream states finalizable.
@@ -486,38 +560,40 @@ impl EnvelopeNormalizer {
         self.session.status.store(SESSION_FAILED, Ordering::Release);
     }
 
-    fn register_stream(
+    fn bind_stream(
         &mut self,
         stream: &StreamDeclaration,
         authority: BaselineAuthority,
-    ) -> Result<CacheScope, Error> {
-        let result = self.register_stream_inner(stream, authority);
+    ) -> Result<Arc<RegisteredStream>, Error> {
+        let result = self.bind_stream_inner(stream, authority);
         if result.is_err() {
             self.fail();
         }
         result
     }
 
-    fn register_stream_inner(
+    fn bind_stream_inner(
         &mut self,
         stream: &StreamDeclaration,
         authority: BaselineAuthority,
-    ) -> Result<CacheScope, Error> {
-        let scope = CacheScope::from(stream);
+    ) -> Result<Arc<RegisteredStream>, Error> {
+        let stream_id: Arc<str> = Arc::from(stream.stream_id.as_str());
+        let scope = Arc::new(CacheScope::from(stream));
         let registration = RegisteredStream {
-            scope: scope.clone(),
+            stream_id: Arc::clone(&stream_id),
+            scope: Arc::clone(&scope),
             initial_cursor: stream.initial_cursor.get(),
             baseline: stream.baseline,
             authority,
         };
         if let Some(registered) = self.streams.get(stream.stream_id.as_str()) {
-            return if registered == &registration {
-                Ok(scope)
+            return if registered.as_ref() == &registration {
+                Ok(Arc::clone(registered))
             } else {
                 Err(Error::ConflictingStreamRegistration)
             };
         }
-        if self.scopes.contains_key(&scope) {
+        if self.scopes.contains_key(scope.as_ref()) {
             return Err(Error::DuplicateStreamScope);
         }
 
@@ -546,17 +622,19 @@ impl EnvelopeNormalizer {
             });
         }
 
-        let stream_id = stream.stream_id.clone().into_boxed_str();
-        self.streams.insert(stream_id.clone(), registration);
-        self.scopes.insert(scope.clone(), stream_id);
+        let registration = Arc::new(registration);
+        self.streams
+            .insert(Arc::clone(&stream_id), Arc::clone(&registration));
+        self.scopes.insert(scope, stream_id);
         self.identity_bytes = observed_identity_bytes;
-        Ok(scope)
+        Ok(registration)
     }
 }
 
 #[derive(Clone, Eq, PartialEq)]
 struct RegisteredStream {
-    scope: CacheScope,
+    stream_id: Arc<str>,
+    scope: Arc<CacheScope>,
     initial_cursor: u64,
     baseline: Baseline,
     authority: BaselineAuthority,
@@ -568,13 +646,13 @@ struct RegisteredStream {
 /// content-free resource counts, but cannot format trace-controlled values.
 #[derive(Eq, PartialEq)]
 pub struct CacheView {
-    scope: CacheScope,
+    scope: Arc<CacheScope>,
     keys: BTreeSet<CacheKey>,
     identity_bytes: u64,
 }
 
 impl CacheView {
-    fn empty(scope: CacheScope) -> Self {
+    fn empty(scope: Arc<CacheScope>) -> Self {
         Self {
             scope,
             keys: BTreeSet::new(),
@@ -948,7 +1026,7 @@ impl Diagnostics {
 pub struct StreamState {
     session: Arc<SessionMarker>,
     limits: Limits,
-    stream_id: Box<str>,
+    stream_id: Arc<str>,
     initial_cursor: u64,
     certainty: Certainty,
     frontier: Option<u64>,
@@ -967,48 +1045,28 @@ pub struct StreamState {
 }
 
 impl StreamState {
-    /// Construct state from one stream declaration and an external trust decision.
-    ///
-    /// # Errors
-    ///
-    /// Returns a stable error for a closed session, unsupported limits, a
-    /// non-stream record, active record validation, mismatched trusted-empty
-    /// authority, conflicting stream registration, duplicate canonical scope,
-    /// or session stream and identity budgets.
-    pub fn new(
+    #[cfg(test)]
+    fn new(
         declaration: &ValidatedRecord,
         authority: BaselineAuthority,
         normalizer: &mut EnvelopeNormalizer,
     ) -> Result<Self, Error> {
-        if normalizer.session.status.load(Ordering::Acquire) != SESSION_OPEN {
-            return Err(Error::NormalizerFailed);
-        }
-        let limits = normalizer.limits;
-        validate_depth(&limits)?;
-        if let Err(error) = declaration.as_record().validate(&limits) {
-            normalizer.fail();
-            return Err(Error::RecordValidation { error });
-        }
-        let Record::Stream(stream) = declaration.as_record() else {
-            normalizer.fail();
-            return Err(Error::WrongRecordKind);
-        };
-        let trusted_empty = match authority {
-            BaselineAuthority::TrustDeclaredEmpty => {
-                if stream.baseline != Baseline::EmptyAtEngineStart {
-                    return Err(Error::BaselineAuthorityMismatch);
-                }
-                true
-            }
-            BaselineAuthority::TreatAsUnknown => false,
-        };
-        let scope = normalizer.register_stream(stream, authority)?;
+        let blueprint = normalizer.register_stream(declaration, authority)?;
+        Ok(Self::from_blueprint(&blueprint))
+    }
 
-        Ok(Self {
-            session: Arc::clone(&normalizer.session),
-            limits,
-            stream_id: stream.stream_id.clone().into_boxed_str(),
-            initial_cursor: stream.initial_cursor.get(),
+    fn from_blueprint(blueprint: &StreamBlueprint) -> Self {
+        let registration = &blueprint.registration;
+        let trusted_empty = registration.authority == BaselineAuthority::TrustDeclaredEmpty;
+        debug_assert!(
+            !trusted_empty || registration.baseline == Baseline::EmptyAtEngineStart,
+            "trusted authority must match an empty-baseline registration"
+        );
+        Self {
+            session: Arc::clone(&blueprint.session),
+            limits: blueprint.limits,
+            stream_id: Arc::clone(&registration.stream_id),
+            initial_cursor: registration.initial_cursor,
             certainty: if trusted_empty {
                 Certainty::Exact
             } else {
@@ -1021,13 +1079,13 @@ impl StreamState {
             equivocation_ceiling: None,
             unavailable_floor: None,
             unavailable_ceiling: None,
-            view: CacheView::empty(scope),
+            view: CacheView::empty(Arc::clone(&registration.scope)),
             pending: BTreeMap::new(),
             pending_bytes: 0,
             recent: BTreeMap::new(),
             diagnostics: Diagnostics::default(),
             failed: false,
-        })
+        }
     }
 
     /// Admit one delivery that was normalized exactly once.

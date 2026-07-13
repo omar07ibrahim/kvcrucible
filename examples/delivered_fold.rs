@@ -6,7 +6,7 @@ use std::{
 use kvcrucible::{
     jsonl::{JsonlReader, LocatedRecord},
     limits::Limits,
-    state::{BaselineAuthority, Certainty, EnvelopeNormalizer, StreamState},
+    state::{BaselineAuthority, Certainty, EnvelopeNormalizer},
     trace::TraceValidator,
 };
 
@@ -38,18 +38,20 @@ fn main() -> Result<(), Box<dyn Error>> {
     assert_eq!(structural.envelopes(), 3);
 
     let mut normalizer = EnvelopeNormalizer::new(limits)?;
-    let mut state = StreamState::new(
-        &records[1],
-        BaselineAuthority::TrustDeclaredEmpty,
-        &mut normalizer,
-    )?;
+    let blueprint =
+        normalizer.register_stream(&records[1], BaselineAuthority::TrustDeclaredEmpty)?;
+    let prepared = records[2..]
+        .iter()
+        .cloned()
+        .map(|record| normalizer.prepare(record))
+        .collect::<Result<Vec<_>, _>>()?;
+    let sealed = normalizer.seal()?;
+    let mut state = blueprint.start(&sealed)?;
 
-    for record in &records[2..] {
-        let prepared = normalizer.prepare(record.clone())?;
+    for prepared in prepared {
         println!("{:?}", state.admit(prepared)?);
     }
 
-    let sealed = normalizer.seal()?;
     let summary = state.finish(&sealed)?;
     assert_eq!(summary.certainty(), Certainty::Exact);
     assert_eq!(summary.frontier(), Some(2));

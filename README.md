@@ -103,9 +103,10 @@ complete current trust boundary:
 cargo run --example delivered_fold
 ```
 
-It decodes five bounded JSONL records, validates the complete trace, applies an
-out-of-order delivery sequence, seals the normalization session, and finalizes
-an exact three-key view:
+It decodes five bounded JSONL records, validates the complete trace, registers
+one stream blueprint, and prepares each source envelope. Only after sealing the
+normalization session does it start a fresh scenario state, apply an
+out-of-order delivery sequence, and finalize an exact three-key view:
 
 ```text
 Applied
