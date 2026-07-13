@@ -3,6 +3,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt,
+    sync::Arc,
 };
 
 use thiserror::Error as ThisError;
@@ -312,15 +313,95 @@ impl TraceSummary {
     }
 }
 
+/// Opaque EOF proof containing validated, numerically resolved fault plans.
+///
+/// The capability is available only after the complete trace succeeds. Its
+/// executable schedule representation remains crate-private so callers cannot
+/// construct actions from records that bypassed trace-wide validation.
+pub struct ValidatedTracePlan {
+    summary: TraceSummary,
+    limits: Limits,
+    stream_ids: Box<[Arc<str>]>,
+    envelope_ids: Box<[Arc<str>]>,
+    schedules: Box<[SchedulePlan]>,
+}
+
+impl ValidatedTracePlan {
+    /// Return content-free accounting facts for the complete trace.
+    #[must_use]
+    pub const fn summary(&self) -> TraceSummary {
+        self.summary
+    }
+
+    /// Consume the EOF proof for a crate-internal sealed-scenario binding.
+    #[must_use]
+    pub(crate) fn into_parts(self) -> ValidatedTraceParts {
+        ValidatedTraceParts {
+            summary: self.summary,
+            limits: self.limits,
+            stream_ids: self.stream_ids,
+            envelope_ids: self.envelope_ids,
+            schedules: self.schedules,
+        }
+    }
+}
+
+/// Crate-private pieces needed to bind a validated plan to normalized sources.
+pub(crate) struct ValidatedTraceParts {
+    pub(crate) summary: TraceSummary,
+    pub(crate) limits: Limits,
+    pub(crate) stream_ids: Box<[Arc<str>]>,
+    pub(crate) envelope_ids: Box<[Arc<str>]>,
+    pub(crate) schedules: Box<[SchedulePlan]>,
+}
+
+/// Zero-based physical source-envelope position, excluding other record kinds.
+#[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
+pub(crate) struct SourceIndex(pub(crate) usize);
+
+/// Stable numeric identity of an original or synthesized delivery.
+#[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
+pub(crate) struct DeliveryKey {
+    pub(crate) source: SourceIndex,
+    pub(crate) occurrence: u16,
+}
+
+/// One validated action with every trace identity resolved to a numeric key.
+pub(crate) enum PlannedAction {
+    Drop {
+        target: DeliveryKey,
+    },
+    Duplicate {
+        target: DeliveryKey,
+        first_occurrence: u16,
+        copies: u16,
+    },
+    MoveBefore {
+        target: DeliveryKey,
+        anchor: DeliveryKey,
+    },
+}
+
+/// One independent schedule over the physical envelope prefix at its record.
+pub(crate) struct SchedulePlan {
+    pub(crate) id: Arc<str>,
+    pub(crate) stream_prefix_len: usize,
+    pub(crate) prefix_len: usize,
+    pub(crate) actions: Box<[PlannedAction]>,
+}
+
 /// Incremental validator for ordering, identity, privacy, and fault references.
 pub struct TraceValidator {
     limits: Limits,
     records: u64,
     header: Option<HeaderFacts>,
-    streams: BTreeMap<Box<str>, StreamFacts>,
+    streams: BTreeMap<Arc<str>, StreamFacts>,
+    stream_order: Vec<Arc<str>>,
     stream_identities: BTreeSet<StreamIdentity>,
-    envelopes: BTreeMap<Box<str>, u64>,
-    schedules: BTreeSet<Box<str>>,
+    envelopes: BTreeMap<Arc<str>, SourceIndex>,
+    envelope_order: Vec<Arc<str>>,
+    schedules: BTreeSet<Arc<str>>,
+    schedule_plans: Vec<SchedulePlan>,
     fault_actions: u64,
     identity_bytes: u64,
     schedule_work: u64,
@@ -346,9 +427,12 @@ impl TraceValidator {
             records: 0,
             header: None,
             streams: BTreeMap::new(),
+            stream_order: Vec::new(),
             stream_identities: BTreeSet::new(),
             envelopes: BTreeMap::new(),
+            envelope_order: Vec::new(),
             schedules: BTreeSet::new(),
+            schedule_plans: Vec::new(),
             fault_actions: 0,
             identity_bytes: 0,
             schedule_work: 0,
@@ -383,11 +467,24 @@ impl TraceValidator {
     /// Returns [`Error::MissingHeader`] for an empty trace or
     /// [`Error::ValidatorFailed`] after an earlier failure.
     pub fn finish(self) -> Result<TraceSummary, Error> {
+        self.finish_planned().map(|plan| plan.summary())
+    }
+
+    /// Finish validation and return an opaque numerically resolved trace plan.
+    ///
+    /// No plan is returned until EOF succeeds, so schedules retained before a
+    /// late or sticky validation failure cannot become executable capabilities.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::MissingHeader`] for an empty trace or
+    /// [`Error::ValidatorFailed`] after an earlier failure.
+    pub fn finish_planned(self) -> Result<ValidatedTracePlan, Error> {
         if self.failed {
             return Err(Error::ValidatorFailed);
         }
         let header = self.header.ok_or(Error::MissingHeader)?;
-        Ok(TraceSummary {
+        let summary = TraceSummary {
             records: self.records,
             streams: count_len(self.streams.len(), self.records)?,
             envelopes: count_len(self.envelopes.len(), self.records)?,
@@ -396,6 +493,16 @@ impl TraceValidator {
             identity_bytes: self.identity_bytes,
             schedule_work: self.schedule_work,
             redaction: header.redaction,
+        };
+        debug_assert_eq!(self.streams.len(), self.stream_order.len());
+        debug_assert_eq!(self.envelopes.len(), self.envelope_order.len());
+        debug_assert_eq!(self.schedules.len(), self.schedule_plans.len());
+        Ok(ValidatedTracePlan {
+            summary,
+            limits: self.limits,
+            stream_ids: self.stream_order.into_boxed_slice(),
+            envelope_ids: self.envelope_order.into_boxed_slice(),
+            schedules: self.schedule_plans.into_boxed_slice(),
         })
     }
 
@@ -467,12 +574,14 @@ impl TraceValidator {
             self.limits.max_identity_bytes_per_trace,
         )?;
 
+        let stream_id: Arc<str> = Arc::from(stream.stream_id.as_str());
         self.streams.insert(
-            stream.stream_id.clone().into_boxed_str(),
+            Arc::clone(&stream_id),
             StreamFacts {
                 initial_cursor: stream.initial_cursor.get(),
             },
         );
+        self.stream_order.push(stream_id);
         self.stream_identities.insert(identity);
         self.identity_bytes = identity_bytes;
         Ok(())
@@ -513,8 +622,10 @@ impl TraceValidator {
             self.limits.max_identity_bytes_per_trace,
         )?;
 
-        self.envelopes
-            .insert(envelope.envelope_id.clone().into_boxed_str(), record);
+        let envelope_id: Arc<str> = Arc::from(envelope.envelope_id.as_str());
+        let source = SourceIndex(self.envelope_order.len());
+        self.envelopes.insert(Arc::clone(&envelope_id), source);
+        self.envelope_order.push(envelope_id);
         self.identity_bytes = identity_bytes;
         Ok(())
     }
@@ -544,7 +655,7 @@ impl TraceValidator {
             [schedule.schedule_id.as_str()],
             self.limits.max_identity_bytes_per_trace,
         )?;
-        let local_work = self.validate_schedule(record, schedule)?;
+        let (local_work, actions) = self.plan_schedule(record, schedule)?;
         let schedule_work = checked_limit(
             record,
             Resource::ScheduleWork,
@@ -553,15 +664,26 @@ impl TraceValidator {
             self.limits.max_schedule_work_per_trace,
         )?;
 
-        self.schedules
-            .insert(schedule.schedule_id.clone().into_boxed_str());
+        let schedule_id: Arc<str> = Arc::from(schedule.schedule_id.as_str());
+        let inserted = self.schedules.insert(Arc::clone(&schedule_id));
+        debug_assert!(inserted, "a planned schedule ID must be newly registered");
+        self.schedule_plans.push(SchedulePlan {
+            id: schedule_id,
+            stream_prefix_len: self.stream_order.len(),
+            prefix_len: self.envelope_order.len(),
+            actions,
+        });
         self.fault_actions = fault_actions;
         self.identity_bytes = identity_bytes;
         self.schedule_work = schedule_work;
         Ok(())
     }
 
-    fn validate_schedule(&self, record: u64, schedule: &FaultSchedule) -> Result<u64, Error> {
+    fn plan_schedule(
+        &self,
+        record: u64,
+        schedule: &FaultSchedule,
+    ) -> Result<(u64, Box<[PlannedAction]>), Error> {
         let prefix = count_len(self.envelopes.len(), record)?;
         let mut occurrences = checked_limit(
             record,
@@ -571,8 +693,9 @@ impl TraceValidator {
             self.limits.max_occurrences_per_schedule,
         )?;
         let mut work = prefix;
-        let mut next_occurrence = BTreeMap::<u64, u32>::new();
-        let mut removed = BTreeSet::<(u64, u16)>::new();
+        let mut next_occurrence = BTreeMap::<SourceIndex, u32>::new();
+        let mut removed = BTreeSet::<DeliveryKey>::new();
+        let mut actions = Vec::with_capacity(schedule.actions.len());
 
         for (action_index, action) in schedule.actions.iter().enumerate() {
             match action {
@@ -586,9 +709,10 @@ impl TraceValidator {
                         &removed,
                     )?;
                     removed.insert(target);
+                    actions.push(PlannedAction::Drop { target });
                 }
                 FaultAction::Duplicate { target, copies } => {
-                    let (envelope, _) = self.resolve_delivery(
+                    let target = self.resolve_delivery(
                         record,
                         action_index,
                         target,
@@ -596,7 +720,7 @@ impl TraceValidator {
                         &next_occurrence,
                         &removed,
                     )?;
-                    let next = next_occurrence.get(&envelope).copied().unwrap_or(1);
+                    let next = next_occurrence.get(&target.source).copied().unwrap_or(1);
                     let new_next = next.checked_add(u32::from(*copies)).ok_or(
                         Error::FaultOccurrenceOverflow {
                             record,
@@ -609,6 +733,11 @@ impl TraceValidator {
                             action: action_index,
                         });
                     }
+                    let first_occurrence =
+                        u16::try_from(next).map_err(|_| Error::FaultOccurrenceOverflow {
+                            record,
+                            action: action_index,
+                        })?;
                     occurrences = checked_limit(
                         record,
                         Resource::ScheduleOccurrences,
@@ -626,10 +755,15 @@ impl TraceValidator {
                         work,
                         self.limits.max_schedule_work_per_trace,
                     )?;
-                    next_occurrence.insert(envelope, new_next);
+                    next_occurrence.insert(target.source, new_next);
+                    actions.push(PlannedAction::Duplicate {
+                        target,
+                        first_occurrence,
+                        copies: *copies,
+                    });
                 }
                 FaultAction::MoveBefore { target, anchor } => {
-                    self.resolve_delivery(
+                    let target = self.resolve_delivery(
                         record,
                         action_index,
                         target,
@@ -637,7 +771,7 @@ impl TraceValidator {
                         &next_occurrence,
                         &removed,
                     )?;
-                    self.resolve_delivery(
+                    let anchor = self.resolve_delivery(
                         record,
                         action_index,
                         anchor,
@@ -645,10 +779,11 @@ impl TraceValidator {
                         &next_occurrence,
                         &removed,
                     )?;
+                    actions.push(PlannedAction::MoveBefore { target, anchor });
                 }
             }
         }
-        Ok(work)
+        Ok((work, actions.into_boxed_slice()))
     }
 
     fn resolve_delivery(
@@ -657,10 +792,10 @@ impl TraceValidator {
         action: usize,
         delivery: &DeliveryRef,
         role: DeliveryRole,
-        next_occurrence: &BTreeMap<u64, u32>,
-        removed: &BTreeSet<(u64, u16)>,
-    ) -> Result<(u64, u16), Error> {
-        let envelope = self
+        next_occurrence: &BTreeMap<SourceIndex, u32>,
+        removed: &BTreeSet<DeliveryKey>,
+    ) -> Result<DeliveryKey, Error> {
+        let source = self
             .envelopes
             .get(delivery.envelope_id.as_str())
             .copied()
@@ -670,7 +805,7 @@ impl TraceValidator {
                 role,
             })?;
         let occurrence = delivery.occurrence;
-        let next = next_occurrence.get(&envelope).copied().unwrap_or(1);
+        let next = next_occurrence.get(&source).copied().unwrap_or(1);
         if u32::from(occurrence) >= next {
             return Err(Error::FaultOccurrenceNotCreated {
                 record,
@@ -678,14 +813,15 @@ impl TraceValidator {
                 role,
             });
         }
-        if removed.contains(&(envelope, occurrence)) {
+        let key = DeliveryKey { source, occurrence };
+        if removed.contains(&key) {
             return Err(Error::FaultOccurrenceRemoved {
                 record,
                 action,
                 role,
             });
         }
-        Ok((envelope, occurrence))
+        Ok(key)
     }
 }
 
@@ -829,8 +965,8 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::{
-        DeliveryRole, Error, Resource, TokenEvidenceKind, TraceValidator, checked_limit,
-        validate_trace,
+        DeliveryKey, DeliveryRole, Error, PlannedAction, Resource, SourceIndex, TokenEvidenceKind,
+        TraceValidator, checked_limit, validate_trace,
     };
     use crate::{
         TRACE_FORMAT_VERSION,
@@ -1022,6 +1158,30 @@ mod tests {
         assert_eq!(summary.identity_bytes(), 0);
         assert_eq!(summary.schedule_work(), 0);
         assert_eq!(summary.redaction(), RedactionMode::UnkeyedLinkable);
+    }
+
+    #[test]
+    fn eof_plan_summary_matches_the_compatible_finish_path() {
+        let records = [
+            header(RedactionMode::Omitted),
+            stream("s", "a", 0, 0),
+            envelope("e", "s", 0, Vec::new()),
+            schedule(
+                "drop",
+                vec![FaultAction::Drop {
+                    target: delivery("e", 0),
+                }],
+            ),
+        ];
+        let expected = validate_trace(&records, Limits::default()).unwrap();
+        let mut validator = TraceValidator::new(Limits::default()).unwrap();
+        for record in &records {
+            validator.push(record).unwrap();
+        }
+
+        let planned = validator.finish_planned().unwrap();
+        assert_eq!(planned.summary(), expected);
+        assert_eq!(planned.into_parts().summary, expected);
     }
 
     #[test]
@@ -1336,6 +1496,250 @@ mod tests {
         assert_eq!(summary.fault_schedules(), 2);
         assert_eq!(summary.fault_actions(), 1);
         assert_eq!(summary.schedule_work(), 3);
+    }
+
+    #[test]
+    fn eof_plan_preserves_physical_orders_prefixes_and_numeric_sources() {
+        let records = [
+            header(RedactionMode::Omitted),
+            stream("sa", "a", 0, 0),
+            envelope("ea", "sa", 0, Vec::new()),
+            schedule("first", Vec::new()),
+            stream("sb", "b", 1, 0),
+            envelope("eb", "sb", 0, Vec::new()),
+            schedule(
+                "second",
+                vec![FaultAction::MoveBefore {
+                    target: delivery("eb", 0),
+                    anchor: delivery("ea", 0),
+                }],
+            ),
+            envelope("ec", "sa", 1, Vec::new()),
+            schedule(
+                "third",
+                vec![FaultAction::Drop {
+                    target: delivery("ec", 0),
+                }],
+            ),
+        ];
+        let mut validator = TraceValidator::new(Limits::default()).unwrap();
+        for record in &records {
+            validator.push(record).unwrap();
+        }
+
+        let parts = validator.finish_planned().unwrap().into_parts();
+        assert_eq!(parts.limits, Limits::default());
+        assert!(parts.stream_ids.iter().map(AsRef::as_ref).eq(["sa", "sb"]));
+        assert!(
+            parts
+                .envelope_ids
+                .iter()
+                .map(AsRef::as_ref)
+                .eq(["ea", "eb", "ec"])
+        );
+        assert_eq!(parts.schedules.len(), 3);
+        assert_eq!(parts.schedules[0].id.as_ref(), "first");
+        assert_eq!(parts.schedules[0].stream_prefix_len, 1);
+        assert_eq!(parts.schedules[0].prefix_len, 1);
+        assert!(parts.schedules[0].actions.is_empty());
+
+        assert_eq!(parts.schedules[1].id.as_ref(), "second");
+        assert_eq!(parts.schedules[1].stream_prefix_len, 2);
+        assert_eq!(parts.schedules[1].prefix_len, 2);
+        let [PlannedAction::MoveBefore { target, anchor }] = parts.schedules[1].actions.as_ref()
+        else {
+            panic!("second schedule must contain one numeric move");
+        };
+        assert!(
+            *target
+                == DeliveryKey {
+                    source: SourceIndex(1),
+                    occurrence: 0,
+                }
+        );
+        assert!(
+            *anchor
+                == DeliveryKey {
+                    source: SourceIndex(0),
+                    occurrence: 0,
+                }
+        );
+
+        assert_eq!(parts.schedules[2].id.as_ref(), "third");
+        assert_eq!(parts.schedules[2].stream_prefix_len, 2);
+        assert_eq!(parts.schedules[2].prefix_len, 3);
+        let [PlannedAction::Drop { target }] = parts.schedules[2].actions.as_ref() else {
+            panic!("third schedule must contain one numeric drop");
+        };
+        assert!(
+            *target
+                == DeliveryKey {
+                    source: SourceIndex(2),
+                    occurrence: 0,
+                }
+        );
+    }
+
+    #[test]
+    fn eof_plan_freezes_duplicate_ranges_and_resets_each_schedule_namespace() {
+        let records = [
+            header(RedactionMode::Omitted),
+            stream("s", "a", 0, 0),
+            envelope("e", "s", 0, Vec::new()),
+            schedule(
+                "first",
+                vec![
+                    FaultAction::Duplicate {
+                        target: delivery("e", 0),
+                        copies: 2,
+                    },
+                    FaultAction::Duplicate {
+                        target: delivery("e", 1),
+                        copies: 2,
+                    },
+                ],
+            ),
+            schedule(
+                "second",
+                vec![FaultAction::Duplicate {
+                    target: delivery("e", 0),
+                    copies: 1,
+                }],
+            ),
+        ];
+        let mut validator = TraceValidator::new(Limits::default()).unwrap();
+        for record in &records {
+            validator.push(record).unwrap();
+        }
+
+        let parts = validator.finish_planned().unwrap().into_parts();
+        assert_eq!(parts.schedules.len(), 2);
+        let [
+            PlannedAction::Duplicate {
+                target: first_target,
+                first_occurrence: first,
+                copies: first_copies,
+            },
+            PlannedAction::Duplicate {
+                target: second_target,
+                first_occurrence: second,
+                copies: second_copies,
+            },
+        ] = parts.schedules[0].actions.as_ref()
+        else {
+            panic!("first schedule must contain two numeric duplicates");
+        };
+        assert!(
+            *first_target
+                == DeliveryKey {
+                    source: SourceIndex(0),
+                    occurrence: 0,
+                }
+        );
+        assert_eq!((*first, *first_copies), (1, 2));
+        assert!(
+            *second_target
+                == DeliveryKey {
+                    source: SourceIndex(0),
+                    occurrence: 1,
+                }
+        );
+        assert_eq!((*second, *second_copies), (3, 2));
+
+        let [
+            PlannedAction::Duplicate {
+                target,
+                first_occurrence,
+                copies,
+            },
+        ] = parts.schedules[1].actions.as_ref()
+        else {
+            panic!("second schedule must contain one numeric duplicate");
+        };
+        assert!(
+            *target
+                == DeliveryKey {
+                    source: SourceIndex(0),
+                    occurrence: 0,
+                }
+        );
+        assert_eq!((*first_occurrence, *copies), (1, 1));
+    }
+
+    #[test]
+    fn eof_plan_retains_the_last_representable_occurrence_allocation() {
+        let limits = Limits {
+            max_duplicate_copies: u16::MAX,
+            ..Limits::default()
+        };
+        let records = [
+            header(RedactionMode::Omitted),
+            stream("s", "a", 0, 0),
+            envelope("e", "s", 0, Vec::new()),
+            schedule_with(
+                "boundary",
+                vec![
+                    FaultAction::Duplicate {
+                        target: delivery("e", 0),
+                        copies: u16::MAX - 1,
+                    },
+                    FaultAction::Duplicate {
+                        target: delivery("e", u16::MAX - 1),
+                        copies: 1,
+                    },
+                ],
+                &limits,
+            ),
+        ];
+        let mut validator = TraceValidator::new(limits).unwrap();
+        for record in &records {
+            validator.push(record).unwrap();
+        }
+
+        let parts = validator.finish_planned().unwrap().into_parts();
+        let PlannedAction::Duplicate {
+            first_occurrence,
+            copies,
+            ..
+        } = &parts.schedules[0].actions[1]
+        else {
+            panic!("boundary action must remain a numeric duplicate");
+        };
+        assert_eq!((*first_occurrence, *copies), (u16::MAX, 1));
+    }
+
+    #[test]
+    fn eof_plan_is_unavailable_after_missing_header_or_late_sticky_failure() {
+        assert!(matches!(
+            TraceValidator::new(Limits::default())
+                .unwrap()
+                .finish_planned(),
+            Err(Error::MissingHeader)
+        ));
+
+        let mut validator = with_header(Limits::default(), RedactionMode::Omitted);
+        validator.push(&stream("s", "a", 0, 0)).unwrap();
+        validator.push(&envelope("e", "s", 0, Vec::new())).unwrap();
+        validator
+            .push(&schedule(
+                "already-planned",
+                vec![FaultAction::Drop {
+                    target: delivery("e", 0),
+                }],
+            ))
+            .unwrap();
+        assert_eq!(
+            validator.push(&envelope("e", "s", 1, Vec::new())),
+            Err(Error::DuplicateEnvelopeId { record: 4 })
+        );
+        assert_eq!(
+            validator.push(&schedule("after-failure", Vec::new())),
+            Err(Error::ValidatorFailed)
+        );
+        assert!(matches!(
+            validator.finish_planned(),
+            Err(Error::ValidatorFailed)
+        ));
     }
 
     #[test]

@@ -1,34 +1,47 @@
 # Replay and certainty semantics
 
-Status: bounded internal semantic fingerprinting and the delivered-envelope
-state fold are implemented. Fault-schedule execution, replay requests and
-expiry, pristine/faulted orchestration, convergence, reduction, and reports
+Status: bounded internal semantic fingerprinting, the delivered-envelope state
+fold, sealed numeric fault plans, and deterministic drop/duplicate/reorder
+materialization are implemented. Schedule-prefix pristine/faulted execution and
+eligibility-aware per-stream convergence are also implemented. Replay request,
+outcome, response-attribution, and expiry orchestration, reduction, and reports
 remain v0.1 contracts for later slices.
 
 ## Current execution boundary
 
-The current fold consumes already delivered envelopes in admission order. It
-does not decide which envelopes are dropped, reordered, duplicated, or replayed.
-The envelope `origin` and stable ID remain bounded evidence for the future
-orchestrator; `origin` does not change cache-mutation semantics.
+The fold consumes envelopes in caller-supplied admission order or in the order
+of a materialized fault schedule. `compare_schedule` starts fresh pristine and
+faulted states over the exact stream and source prefixes visible at the schedule
+record. The envelope `origin` remains observed provenance: a synthesized
+transport duplicate shares its source allocation and does not become a replay
+response. Origin does not change cache-mutation semantics.
 
-One physical source trace uses one `TraceValidator` and one
-`EnvelopeNormalizer` under the same `Limits`:
+The public coordinated path is one `TraceAssembler` under one `Limits` value:
 
 1. acquire an untrusted physical JSONL trace through `JsonlReader`, which bounds
    per-line bytes, cumulative trace bytes, and physical record count;
-2. push it into the incremental `TraceValidator` before it contributes to state;
-3. register accepted stream declarations with an external baseline authority;
-4. normalize every accepted physical source envelope exactly once with
-   `prepare` and share that immutable value with delivered folds;
-5. at EOF, require `TraceValidator::finish`, then consume the normalizer with
-   `seal`; and
-6. finalize each stream state with the matching seal.
+2. give each owned validated record to the assembler, with an external baseline
+   authority exactly for stream declarations;
+3. let its incremental validator resolve schedule references to numeric source
+   occurrences while its normalizer prepares that same owned record exactly
+   once;
+4. at EOF, require both structural completion and normalization seal before a
+   `SealedTrace` capability is returned;
+5. materialize a schedule by ordinal over its physical source prefix, sharing
+   prepared sources through `Arc`;
+6. compare fresh occurrence-zero physical-order and materialized-order folds for
+   every stream visible at that schedule; or
+7. start and finalize individual stream states against the matching sealed trace
+   when a caller needs direct disposition-level inspection.
+
+Streams and envelopes declared after a schedule record are outside that
+schedule's immutable snapshot and cannot affect either comparison side.
 
 State accumulated before a later structural failure is not an admissible
 result. The validator enforces header order, declaration order, redaction,
 global identity uniqueness, and fault references; the normalizer is not a
-replacement for it.
+replacement for it. The low-level validator and normalizer remain available,
+but only the coordinated assembler can create an executable sealed corpus.
 
 `decode_line` is a one-record primitive. A caller using it directly must supply
 an outer framing layer that independently enforces cumulative trace bytes and
@@ -37,10 +50,10 @@ physical record count; it does not replace `JsonlReader` for untrusted files.
 The one-session-per-physical-trace rule binds cumulative fingerprint work,
 stream and envelope counts, unique envelope IDs, immutable stream contracts,
 and retained identity bytes to the trace. Prepared envelopes and seals from a
-different session are rejected. A `prepare` failure makes its normalization
-session sticky-failed. A hard `admit` failure makes that constructed stream state
-sticky-failed. Constructor errors, such as a baseline-authority mismatch, return
-before a stream state exists.
+different session are rejected. Any assembler error prevents EOF sealing. A
+hard `admit` failure makes that constructed stream state sticky-failed. A
+baseline-authority mismatch is non-poisoning in the low-level normalizer but
+fail-closed at the coordinated assembler boundary.
 
 ## Consumer state
 
@@ -213,18 +226,27 @@ it is never treated as an automatically detected restart. Fault schedules may
 eventually alter delivery around a declared boundary, but may not invent an
 epoch or producer incarnation.
 
-## Future replay and convergence contract
+## Convergence and future replay contract
 
-Slice 4 will execute deterministic fault schedules, issue bounded replay
-requests, model attempt exhaustion and expiry, and run both pristine and faulted
-folds. Occurrence zero must preserve physical trace order; the orchestrator may
-not silently sort envelopes by cursor.
+Slice 4 executes deterministic fault schedules while preserving physical
+occurrence-zero order; the materializer never silently sorts envelopes by
+cursor. `compare_schedule` then executes that physical order as the pristine
+side and the materialized order as the faulted side. For each visible publisher
+stream it returns `Converged`, `Diverged`, or `Ineligible`.
 
-A future convergence check is eligible only when the faulted state is `exact`
-at the same logical frontier as the pristine state. It passes only when their
-same-scope canonical cache views are equal and no active unknown reason remains.
-An `unknown` state is ineligible, not automatically non-convergent. Historical
-diagnostics remain reportable after membership recovery.
+A comparison is eligible only when both finalized states are `Exact`, both
+cache views are authoritative, neither side has an active unknown reason, both
+pending-envelope count and pending canonical bytes are zero, and the logical
+frontiers match. Equal same-scope canonical cache views then mean `Converged`;
+different views mean `Diverged`. Any failed prerequisite means `Ineligible`,
+not divergence. Historical diagnostics do not change the verdict. A hard fold
+failure remains a typed execution error, and a zero-stream comparison contains
+no per-stream verdict rather than an aggregate convergence claim.
+
+Replay orchestration remains a distinct future layer. In `v1alpha1`,
+`origin: replay` records observed provenance only; the IR has no replay-request
+identity, attempt outcome, response attribution, or expiry record. The model
+therefore never infers a replay transaction from a cursor gap or origin flag.
 
 ## Future witness contract
 

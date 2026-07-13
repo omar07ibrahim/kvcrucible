@@ -3,8 +3,8 @@ use std::{collections::BTreeMap, sync::Arc};
 use proptest::prelude::*;
 
 use super::{
-    BaselineAuthority, Certainty, Disposition, EnvelopeNormalizer, Error, PreparedEnvelope,
-    Resource, StreamState,
+    BaselineAuthority, Certainty, Diagnostics, Disposition, EnvelopeNormalizer, Error,
+    PreparedEnvelope, Resource, StreamState,
 };
 use crate::{
     ir::{
@@ -1229,6 +1229,49 @@ fn exact_summary_requires_the_matching_consumed_session_seal() {
         first_state.finish(&wrong_seal),
         Err(Error::SessionMismatch)
     ));
+}
+
+#[test]
+fn sealed_blueprint_starts_fresh_scenario_states_sequentially() {
+    let limits = Limits::default();
+    let mut normalizer = EnvelopeNormalizer::new(limits).unwrap();
+    let blueprint = normalizer
+        .register_stream(
+            &declaration(Baseline::EmptyAtEngineStart, 0),
+            BaselineAuthority::TrustDeclaredEmpty,
+        )
+        .unwrap();
+    let same_blueprint = normalizer
+        .register_stream(
+            &declaration(Baseline::EmptyAtEngineStart, 0),
+            BaselineAuthority::TrustDeclaredEmpty,
+        )
+        .unwrap();
+    let source = prepare(&mut normalizer, "source", 0, vec![store(1)]);
+    let sealed = normalizer.seal().unwrap();
+
+    let other_session = EnvelopeNormalizer::new(limits).unwrap().seal().unwrap();
+    assert!(matches!(
+        blueprint.start(&other_session),
+        Err(Error::SessionMismatch)
+    ));
+
+    let mut pristine = blueprint.start(&sealed).unwrap();
+    pristine.admit(Arc::clone(&source)).unwrap();
+    let pristine = pristine.finish(&sealed).unwrap();
+
+    let mut faulted = same_blueprint.start(&sealed).unwrap();
+    assert_eq!(faulted.frontier(), None);
+    assert_eq!(faulted.cache_view().key_count(), 0);
+    assert_eq!(faulted.pending_envelopes(), 0);
+    assert_eq!(faulted.diagnostics(), Diagnostics::default());
+    faulted.admit(source).unwrap();
+    let faulted = faulted.finish(&sealed).unwrap();
+
+    assert_eq!(pristine.certainty(), Certainty::Exact);
+    assert_eq!(faulted.certainty(), Certainty::Exact);
+    assert_eq!(pristine.frontier(), Some(0));
+    assert!(pristine.cache_view() == faulted.cache_view());
 }
 
 #[test]

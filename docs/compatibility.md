@@ -4,7 +4,7 @@ No production engine is supported in the current alpha.
 
 | Source | Targeted version | Ingestion | Recovery model | Evidence |
 |---|---:|---|---|---|
-| Canonical JSONL | `v1alpha1` | bounded streaming codec | delivered-envelope tri-state fold; schedule/replay controller pending | JCS vectors; structural and state-machine tests |
+| Canonical JSONL | `v1alpha1` | bounded streaming codec | tri-state fold, fault materialization, and eligibility-aware comparison; replay pending | JCS vectors; state-machine, materializer property, and oracle-corpus tests |
 | vLLM | `0.23.0` target | planned for v0.1 | bounded event replay | fixtures pending |
 | NVIDIA Dynamo | `1.0.2` research target | not supported | tree dump / event slice / too-new | v0.2 only |
 

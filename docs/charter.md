@@ -8,13 +8,15 @@ may it call its view exact, and which fault schedule is sufficient to disprove
 that claim?
 
 KVCrucible answers that narrow question with an executable state model. The
-current API returns delivery dispositions and a finalized stream summary; the
-v0.1 report will carry a verdict about consumer reconstruction, never a verdict
-about the serving engine that produced the events.
+current API returns delivery dispositions, finalized stream summaries, and
+eligibility-aware schedule comparisons; the v0.1 report will carry a verdict
+about consumer reconstruction, never a verdict about the serving engine that
+produced the events.
 
-The delivered-envelope state model is implemented. Fault scheduling,
-replay-attempt and expiry policies, convergence, reduction, reporting, and the
-pinned engine adapter remain later v0.1 slices.
+The delivered-envelope state model, deterministic fault-schedule
+materialization, and per-stream pristine/faulted convergence oracle are
+implemented. Replay request/outcome/expiry orchestration, reduction, reporting,
+and the pinned engine adapter remain later v0.1 slices.
 
 ## Scope of v0.1
 
@@ -90,7 +92,7 @@ A v0.1 release needs all of the following:
   and replay expiry;
 - convergence checks against the same unfaulted canonical execution;
 - mutation tests or seeded bugs for the invariant layer;
-- deterministic 1-minimal witness reduction with replay verification and a
+- deterministic 1-minimal witness reduction with re-execution verification and a
   recorded reduction order;
 - upstream-derived vLLM fixtures pinned to one version and documented provenance;
 - a static release binary and a clean offline end-to-end demo.
@@ -115,12 +117,12 @@ fault injection.
 
 **Faulted fold**
 
-The view produced after applying an explicit delivery schedule and recovery
-responses.
+The view produced after applying an explicit materialized fault-delivery order.
+Future replay responses require separately observed and attributed evidence.
 
 **Convergence**
 
-Equality between the recovered faulted view and the pristine view for the same
+Equality between an eligible faulted view and the pristine view for the same
 publisher stream at the same logical frontier. It never means that two distinct
 publishers or workers must have equal caches.
 
