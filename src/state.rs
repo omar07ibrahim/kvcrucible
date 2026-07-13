@@ -310,6 +310,21 @@ const SESSION_FAILED: u8 = 2;
 /// Opaque proof that one normalization session reached EOF without failure.
 pub struct SealedSession {
     session: Arc<SessionMarker>,
+    limits: Limits,
+}
+
+impl SealedSession {
+    pub(crate) const fn limits(&self) -> Limits {
+        self.limits
+    }
+
+    pub(crate) fn owns_source(&self, source: &PreparedEnvelope) -> bool {
+        Arc::ptr_eq(&self.session, &source.session)
+    }
+
+    pub(crate) fn owns_blueprint(&self, blueprint: &StreamBlueprint) -> bool {
+        Arc::ptr_eq(&self.session, &blueprint.session)
+    }
 }
 
 /// Immutable, session-bound recipe for fresh states of one declared stream.
@@ -340,6 +355,10 @@ impl StreamBlueprint {
             return Err(Error::NormalizerFailed);
         }
         Ok(StreamState::from_blueprint(self))
+    }
+
+    pub(crate) fn stream_id(&self) -> &str {
+        self.registration.stream_id.as_ref()
     }
 }
 
@@ -454,6 +473,7 @@ impl EnvelopeNormalizer {
         }
         Ok(SealedSession {
             session: Arc::clone(&self.session),
+            limits: self.limits,
         })
     }
 

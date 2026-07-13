@@ -15,8 +15,10 @@ Dynamo is formally verified.
 
 > **Status:** the typed IR, bounded streaming canonical JSONL codec, incremental
 > structural validator, internal non-exported semantic fingerprinting, and
-> bounded tri-state cache-view fold are implemented. Fault/replay orchestration,
-> the convergence oracle, witness reduction, reports, and a production-engine
+> bounded tri-state cache-view fold are implemented. A coordinated assembler
+> now seals validated records, normalized sources, stream blueprints, and opaque
+> numeric fault plans into one capability. Fault materialization, replay, the
+> convergence oracle, witness reduction, reports, and a production-engine
 > adapter are next.
 
 ## The problem
@@ -126,19 +128,21 @@ never depends on that native build.
 
 ## Roadmap
 
-Slices 1–3 are implemented. The current core strictly decodes and encodes the
-IR, validates a trace incrementally, fingerprints each normalized mutation list
-under a session-wide work budget, and folds already delivered envelopes into a
-bounded per-stream cache view. State tests cover deterministic transitions,
-equivocation, modeled gap exhaustion, clear-barrier recovery, and atomic
-rollback on hard failure.
+Slices 1–3 are implemented and Slice 4 is in progress. The current core
+strictly decodes and encodes the IR, validates a trace incrementally,
+fingerprints each normalized mutation list under a session-wide work budget,
+and folds already delivered envelopes into a bounded per-stream cache view. Its
+coordinated assembler exposes numeric fault plans only after successful EOF and
+binds them to the exact owned records normalized in the same session. State
+tests cover deterministic transitions, equivocation, modeled gap exhaustion,
+clear-barrier recovery, and atomic rollback on hard failure.
 
 | Slice | Status | Deliverable | Evidence gate |
 |---|---|---|---|
 | 1 | implemented | Charter, IR, threat model, static CLI | format, lint, test, release build |
 | 2 | implemented | Bounded IR ingestion and trace validation | golden vectors and adversarial limits |
 | 3 | implemented | Tri-state delivered-envelope fold | state-machine and property tests |
-| 4 | next | Fault/replay schedules and oracle | faulted/pristine convergence corpus |
+| 4 | in progress | Sealed fault plans, materialization, replay, and oracle | faulted/pristine convergence corpus |
 | 5 | planned | Witness reducer and report CLI | deterministic 1-minimal regressions |
 | 6 | planned | Pinned vLLM adapter | upstream-derived fixtures and differential tests |
 | 7 | planned | v0.1 reproducibility release | end-to-end demo and compatibility matrix |
