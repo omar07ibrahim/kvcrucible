@@ -30,7 +30,7 @@ responses, and engine-specific extension fields. They may try to:
 ## Controls required by v0.1
 
 - A maximum encoded line size is enforced before JSON-tree allocation; the
-  bounded stream reader must also cap acquisition of the physical line.
+  bounded stream reader caps the physical line, trace bytes, and record count.
 - JSON depth, strings, envelopes, mutations, hashes, metadata, buffered gaps,
   replay attempts, and emitted diagnostics have explicit ceilings.
 - Unknown fields follow a versioned policy; they are never executed.

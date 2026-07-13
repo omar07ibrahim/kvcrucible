@@ -9,6 +9,10 @@ pub const MAX_JSON_DEPTH: usize = 64;
 pub struct Limits {
     /// Maximum JSON payload bytes accepted for one record, excluding newline.
     pub max_line_bytes: usize,
+    /// Maximum physical input bytes in one trace, including line terminators.
+    pub max_trace_bytes: u64,
+    /// Maximum physical records in one trace.
+    pub max_records_per_trace: u64,
     /// Maximum nested JSON value depth; values above [`MAX_JSON_DEPTH`] are invalid.
     pub max_depth: usize,
     /// Maximum scalar and container values in one record.
@@ -49,6 +53,8 @@ impl Default for Limits {
     fn default() -> Self {
         Self {
             max_line_bytes: 1024 * 1024,
+            max_trace_bytes: 64 * 1024 * 1024,
+            max_records_per_trace: 100_000,
             max_depth: 32,
             max_values: 65_536,
             max_string_bytes: 16 * 1024,

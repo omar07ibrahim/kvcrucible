@@ -7,6 +7,7 @@ use serde::Serialize;
 
 pub mod codec;
 pub mod ir;
+pub mod jsonl;
 pub mod limits;
 
 /// Canonical trace format targeted by the first release.

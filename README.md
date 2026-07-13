@@ -99,10 +99,11 @@ never depends on that native build.
 
 ## Roadmap
 
-Slice 2 currently covers strict single-record decoding and encoding: duplicate
-decoded keys, non-integer numbers, unsafe integers, malformed UTF-8, structural
-budgets, and noncanonical input are tested before typed-IR construction. The
-bounded multi-record reader and trace-wide ordering checks are the next gate.
+Slice 2 covers strict record decoding and encoding plus bounded streaming JSONL
+framing: duplicate decoded keys, non-integer numbers, unsafe integers, malformed
+UTF-8, structural budgets, physical-line bytes, trace bytes, record counts, and
+noncanonical input are checked before typed-IR construction. Trace-wide ordering
+and reference checks are the next gate.
 
 | Slice | Deliverable | Evidence gate |
 |---|---|---|
