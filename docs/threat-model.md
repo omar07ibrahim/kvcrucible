@@ -27,27 +27,52 @@ responses, and engine-specific extension fields. They may try to:
 - make an incomplete capture appear exact;
 - exploit an adapter's assumptions about another engine version.
 
-## Controls required by v0.1
+## Implemented controls
 
 - A maximum encoded line size is enforced before JSON-tree allocation; the
-  bounded stream reader must also cap acquisition of the physical line.
-- JSON depth, strings, envelopes, mutations, hashes, metadata, buffered gaps,
-  replay attempts, and emitted diagnostics have explicit ceilings.
+  bounded stream reader caps the physical line, trace bytes, and record count.
+- JSON depth, values, strings, stream and envelope counts, mutations, hashes,
+  metadata, schedule structure, and trace-wide retained identities have explicit
+  ceilings.
+- One fail-closed normalization session bounds semantic-fingerprint work,
+  physical envelope IDs, stream registrations, and immutable stream contracts.
+- Applied fingerprint history, pending count and canonical bytes, numeric gap
+  span, cache keys and variable identity bytes, and diagnostic counters have
+  explicit per-stream ceilings.
 - Unknown fields follow a versioned policy; they are never executed.
 - Cache hashes preserve an explicit wire representation.
 - Raw token IDs are omitted by default; an opt-in capture must be labeled.
-- A trace cannot assert an empty baseline without capture provenance.
-- Cursor equivocation is an error inside a configured fingerprint-retention
-  window; older redelivery is ignored and labeled `stale_unverifiable`.
-- Reducer output is re-executed before it is accepted as a witness.
+- A trace baseline is not authoritative by itself. Trusted-empty state requires
+  an external `BaselineAuthority` decision from pinned provenance or a fixture.
+- Cursor equivocation is a modeled disposition inside the configured internal
+  fingerprint window; older redelivery is ignored as `StaleUnverifiable`.
+- Pending count, pending-byte, and gap-span exhaustion are modeled outcomes that
+  establish an unavailable horizon instead of crashing or pretending evidence
+  was retained.
+- Cache mutation projection is transactional. A hard resource or accounting
+  error fails the stream closed without partially changing its cache view,
+  frontier, pending state, fingerprints, or diagnostics.
 - Engine adapters are data decoders, not dynamic imports of serving runtimes.
 - The CLI opens no socket and invokes no command from trace content.
-- Diagnostic accumulation is bounded and reports truncation explicitly.
+- Diagnostic accumulation is bounded and records when increments were
+  suppressed or clamped.
 - The Rust crate forbids `unsafe` code.
 
 Initial default ceilings are centralized in `Limits` and boundary-tested by the
-codec. They will also be printed in report metadata so that changing a bound
-cannot silently change a verdict.
+codec, stream reader, structural validator, fingerprint normalizer, and state
+fold.
+
+## Planned v0.1 controls
+
+- The replay controller will bound requests, attempts, expiry, and schedule
+  materialization work.
+- The convergence oracle will reject comparisons whose state or frontier is
+  ineligible.
+- Reducer output will be re-executed before it is accepted as a witness.
+- Reports will carry every relevant limit and truncation flag so that changing
+  a bound cannot silently change a verdict.
+- The pinned engine adapter will validate version-specific assumptions against
+  upstream-derived golden fixtures.
 
 ## Privacy posture
 
