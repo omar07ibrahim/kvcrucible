@@ -62,10 +62,12 @@ Initial default ceilings are centralized in `Limits` and boundary-tested by the
 codec, stream reader, structural validator, fingerprint normalizer, and state
 fold.
 
+Fault prefixes, synthesized occurrences, actions, and cumulative
+materialization work are also bounded by `Limits`.
+
 ## Planned v0.1 controls
 
-- The replay controller will bound requests, attempts, expiry, and schedule
-  materialization work.
+- The replay controller will separately bound requests, attempts, and expiry.
 - The convergence oracle will reject comparisons whose state or frontier is
   ineligible.
 - Reducer output will be re-executed before it is accepted as a witness.

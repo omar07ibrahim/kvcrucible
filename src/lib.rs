@@ -4,8 +4,9 @@
 //! canonical JSONL ingestion, incremental trace validation, internal
 //! non-exported semantic fingerprinting, and a bounded per-stream
 //! delivered-envelope fold. Coordinated EOF sealing now produces opaque,
-//! numeric fault plans; schedule materialization, replay orchestration,
-//! convergence, reduction, reports, and engine adapters remain later layers.
+//! numeric fault plans and deterministically materializes their delivery order;
+//! replay orchestration, convergence, reduction, reports, and engine adapters
+//! remain later layers.
 
 use serde::Serialize;
 
@@ -22,17 +23,18 @@ pub mod trace;
 /// Canonical trace format targeted by the first release.
 pub const TRACE_FORMAT_VERSION: &str = "kvcrucible.trace/v1alpha1";
 
-const IMPLEMENTED_CAPABILITIES: [&str; 6] = [
+const IMPLEMENTED_CAPABILITIES: [&str; 7] = [
     "bounded canonical JSONL ingestion and structural validation",
     "internal session-bounded semantic envelope fingerprints",
     "publisher-local cursor and epoch accounting",
     "bounded exact, recovering, and unknown delivered-envelope states",
     "atomic scoped cache-view projection with modeled gap exhaustion",
     "coordinated EOF sealing with opaque numeric fault plans",
+    "deterministic bounded drop, duplicate, and reorder materialization",
 ];
 
 const PLANNED_V0_1_CAPABILITIES: [&str; 4] = [
-    "deterministic fault materialization and bounded replay policy",
+    "bounded replay policy over explicit observed evidence",
     "convergence checks against a pristine reference execution",
     "deterministic 1-minimal witnesses for failed checks",
     "stable reports and one pinned vLLM adapter",
@@ -69,7 +71,7 @@ impl Contract {
     pub const fn v0_1() -> Self {
         Self {
             project: "KVCrucible",
-            status: "sealed numeric fault plans implemented; materialization, replay, convergence, reduction, reports, and engine adapter pending",
+            status: "deterministic fault materialization implemented; replay, convergence, reduction, reports, and engine adapter pending",
             trace_format: TRACE_FORMAT_VERSION,
             implemented_capabilities: &IMPLEMENTED_CAPABILITIES,
             planned_v0_1_capabilities: &PLANNED_V0_1_CAPABILITIES,
@@ -100,6 +102,11 @@ mod tests {
             contract
                 .implemented_capabilities
                 .contains(&"coordinated EOF sealing with opaque numeric fault plans")
+        );
+        assert!(
+            contract
+                .implemented_capabilities
+                .contains(&"deterministic bounded drop, duplicate, and reorder materialization")
         );
         assert!(
             contract

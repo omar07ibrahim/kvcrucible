@@ -12,9 +12,10 @@ current API returns delivery dispositions and a finalized stream summary; the
 v0.1 report will carry a verdict about consumer reconstruction, never a verdict
 about the serving engine that produced the events.
 
-The delivered-envelope state model is implemented. Fault scheduling,
-replay-attempt and expiry policies, convergence, reduction, reporting, and the
-pinned engine adapter remain later v0.1 slices.
+The delivered-envelope state model and deterministic fault-schedule
+materialization are implemented. Replay-attempt and expiry policies,
+convergence, reduction, reporting, and the pinned engine adapter remain later
+v0.1 slices.
 
 ## Scope of v0.1
 

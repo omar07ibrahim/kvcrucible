@@ -7,8 +7,9 @@ Modern inference routers consume cache events to estimate which worker already
 holds a prompt prefix. That view can become subtly wrong when a consumer joins
 late, misses a bounded replay window, receives a duplicate, observes a restart,
 or mistakes a publisher-local sequence for a global one. KVCrucible already
-turns delivered traces into explicit, bounded uncertainty; the planned
-orchestrator will turn faulted executions into replayable counterexamples.
+turns delivered traces into explicit, bounded uncertainty and materializes
+deterministic faulted executions; replay policy and convergence witnesses are
+the next orchestration layers.
 
 This is not a serving engine, a throughput simulator, or a claim that vLLM or
 Dynamo is formally verified.
@@ -17,9 +18,10 @@ Dynamo is formally verified.
 > structural validator, internal non-exported semantic fingerprinting, and
 > bounded tri-state cache-view fold are implemented. A coordinated assembler
 > now seals validated records, normalized sources, stream blueprints, and opaque
-> numeric fault plans into one capability. Fault materialization, replay, the
-> convergence oracle, witness reduction, reports, and a production-engine
-> adapter are next.
+> numeric fault plans into one capability. Its bounded linked-list materializer
+> executes deterministic drop, duplicate, and reorder actions without copying
+> source payloads. Replay, the convergence oracle, witness reduction, reports,
+> and a production-engine adapter are next.
 
 ## The problem
 
@@ -36,9 +38,10 @@ late subscriber may continue building a useful partial view, but it cannot
 truthfully call that view complete. A duplicate store may be harmless, while
 the same cursor carrying a different payload is not.
 
-The delivered-envelope fold already makes those distinctions executable. It
-does not yet execute fault schedules or issue replay requests: those arrive with
-the orchestration layer in Slice 4.
+The delivered-envelope fold already makes those distinctions executable. The
+sealed scenario layer now executes fault schedules, but does not yet issue or
+attribute replay requests; that requires an explicit policy contract rather
+than inference from cursor gaps.
 
 ## v0.1 contract
 
@@ -117,6 +120,24 @@ Applied
 certainty=Exact frontier=Some(2) keys=3
 ```
 
+## Run deterministic fault materialization
+
+The Slice 4 example validates and normalizes the same owned records, seals the
+complete trace, applies duplicate and reorder actions, and folds the resulting
+stable occurrences without rehashing source payloads:
+
+```bash
+cargo run --example fault_materialization
+```
+
+```text
+e2#0 Buffered
+e0#0 Applied
+e1#0 Applied
+e1#1 Duplicate
+certainty=Exact frontier=Some(2) keys=3
+```
+
 The release gate builds a static Linux x86-64 binary explicitly:
 
 ```bash
@@ -133,9 +154,12 @@ strictly decodes and encodes the IR, validates a trace incrementally,
 fingerprints each normalized mutation list under a session-wide work budget,
 and folds already delivered envelopes into a bounded per-stream cache view. Its
 coordinated assembler exposes numeric fault plans only after successful EOF and
-binds them to the exact owned records normalized in the same session. State
-tests cover deterministic transitions, equivocation, modeled gap exhaustion,
-clear-barrier recovery, and atomic rollback on hard failure.
+binds them to the exact owned records normalized in the same session. Its
+indexed linked-list executor retains drop tombstones, inserts stable duplicate
+blocks, and reorders in bounded memory; a property test compares it with a slow
+vector reference model. State tests cover deterministic transitions,
+equivocation, modeled gap exhaustion, clear-barrier recovery, and atomic
+rollback on hard failure.
 
 | Slice | Status | Deliverable | Evidence gate |
 |---|---|---|---|

@@ -16,7 +16,7 @@ fn json_contract_is_a_stable_cli_boundary() {
         serde_json::from_slice(&output.stdout).expect("contract output should be JSON");
     let expected = json!({
         "project": "KVCrucible",
-        "status": "sealed numeric fault plans implemented; materialization, replay, convergence, reduction, reports, and engine adapter pending",
+        "status": "deterministic fault materialization implemented; replay, convergence, reduction, reports, and engine adapter pending",
         "trace_format": "kvcrucible.trace/v1alpha1",
         "implemented_capabilities": [
             "bounded canonical JSONL ingestion and structural validation",
@@ -24,10 +24,11 @@ fn json_contract_is_a_stable_cli_boundary() {
             "publisher-local cursor and epoch accounting",
             "bounded exact, recovering, and unknown delivered-envelope states",
             "atomic scoped cache-view projection with modeled gap exhaustion",
-            "coordinated EOF sealing with opaque numeric fault plans"
+            "coordinated EOF sealing with opaque numeric fault plans",
+            "deterministic bounded drop, duplicate, and reorder materialization"
         ],
         "planned_v0_1_capabilities": [
-            "deterministic fault materialization and bounded replay policy",
+            "bounded replay policy over explicit observed evidence",
             "convergence checks against a pristine reference execution",
             "deterministic 1-minimal witnesses for failed checks",
             "stable reports and one pinned vLLM adapter"
