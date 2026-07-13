@@ -385,6 +385,7 @@ pub(crate) enum PlannedAction {
 /// One independent schedule over the physical envelope prefix at its record.
 pub(crate) struct SchedulePlan {
     pub(crate) id: Arc<str>,
+    pub(crate) stream_prefix_len: usize,
     pub(crate) prefix_len: usize,
     pub(crate) actions: Box<[PlannedAction]>,
 }
@@ -668,6 +669,7 @@ impl TraceValidator {
         debug_assert!(inserted, "a planned schedule ID must be newly registered");
         self.schedule_plans.push(SchedulePlan {
             id: schedule_id,
+            stream_prefix_len: self.stream_order.len(),
             prefix_len: self.envelope_order.len(),
             actions,
         });
@@ -1537,10 +1539,12 @@ mod tests {
         );
         assert_eq!(parts.schedules.len(), 3);
         assert_eq!(parts.schedules[0].id.as_ref(), "first");
+        assert_eq!(parts.schedules[0].stream_prefix_len, 1);
         assert_eq!(parts.schedules[0].prefix_len, 1);
         assert!(parts.schedules[0].actions.is_empty());
 
         assert_eq!(parts.schedules[1].id.as_ref(), "second");
+        assert_eq!(parts.schedules[1].stream_prefix_len, 2);
         assert_eq!(parts.schedules[1].prefix_len, 2);
         let [PlannedAction::MoveBefore { target, anchor }] = parts.schedules[1].actions.as_ref()
         else {
@@ -1562,6 +1566,7 @@ mod tests {
         );
 
         assert_eq!(parts.schedules[2].id.as_ref(), "third");
+        assert_eq!(parts.schedules[2].stream_prefix_len, 2);
         assert_eq!(parts.schedules[2].prefix_len, 3);
         let [PlannedAction::Drop { target }] = parts.schedules[2].actions.as_ref() else {
             panic!("third schedule must contain one numeric drop");

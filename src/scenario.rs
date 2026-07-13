@@ -37,8 +37,15 @@ pub enum Error {
         #[source]
         error: trace::Error,
     },
-    /// Source normalization or stream registration failed.
+    /// Source normalization or stream registration failed during assembly.
     #[error("trace normalization failed: {error}")]
+    Normalization {
+        /// Redacted state-layer failure.
+        #[source]
+        error: state::Error,
+    },
+    /// A direct sealed-state operation failed outside a paired execution.
+    #[error("sealed state operation failed: {error}")]
     State {
         /// Redacted state-layer failure.
         #[source]
@@ -72,6 +79,23 @@ pub enum Error {
     /// A crate-private numeric plan violated its validated invariants.
     #[error("fault schedule violates an internal materialization invariant")]
     MaterializationInvariant,
+    /// Bounded execution state could not be reserved.
+    #[error("scenario execution storage could not be reserved")]
+    ExecutionCapacity,
+    /// A sealed execution input violated its internal routing invariants.
+    #[error("scenario execution violates an internal routing invariant")]
+    ExecutionInvariant,
+    /// One side of paired execution hit a hard state-fold failure.
+    #[error("{mode:?} execution failed for stream index {stream}: {error}")]
+    ExecutionState {
+        /// Pristine or faulted execution side.
+        mode: ExecutionMode,
+        /// Zero-based stream ordinal, never a trace-controlled identity.
+        stream: usize,
+        /// Redacted state-layer failure.
+        #[source]
+        error: state::Error,
+    },
 }
 
 impl Error {
@@ -83,13 +107,17 @@ impl Error {
             Self::BaselineAuthorityRequired => "baseline_authority_required",
             Self::UnexpectedBaselineAuthority => "unexpected_baseline_authority",
             Self::Trace { .. } => "trace_validation",
-            Self::State { .. } => "trace_normalization",
+            Self::Normalization { .. } => "trace_normalization",
+            Self::State { .. } => "state_operation",
             Self::AssemblyInvariant => "assembly_invariant",
             Self::AssemblyCapacity => "assembly_capacity",
             Self::StreamIndexOutOfRange { .. } => "stream_index_out_of_range",
             Self::ScheduleIndexOutOfRange { .. } => "schedule_index_out_of_range",
             Self::MaterializationCapacity => "materialization_capacity",
             Self::MaterializationInvariant => "materialization_invariant",
+            Self::ExecutionCapacity => "execution_capacity",
+            Self::ExecutionInvariant => "execution_invariant",
+            Self::ExecutionState { .. } => "execution_state",
         }
     }
 }
@@ -117,7 +145,7 @@ impl TraceAssembler {
     /// requested limits exceed a compile-time safety ceiling.
     pub fn new(limits: Limits) -> Result<Self, Error> {
         let validator = TraceValidator::new(limits).map_err(trace_error)?;
-        let normalizer = EnvelopeNormalizer::new(limits).map_err(state_error)?;
+        let normalizer = EnvelopeNormalizer::new(limits).map_err(normalization_error)?;
         Ok(Self {
             validator,
             normalizer,
@@ -168,7 +196,7 @@ impl TraceAssembler {
             return Err(Error::AssemblerFailed);
         }
         let plan = self.validator.finish_planned().map_err(trace_error)?;
-        let sealed = self.normalizer.seal().map_err(state_error)?;
+        let sealed = self.normalizer.seal().map_err(normalization_error)?;
         SealedTrace::bind_owned(
             plan,
             sealed,
@@ -198,11 +226,14 @@ impl TraceAssembler {
                 let blueprint = self
                     .normalizer
                     .register_stream(&record, authority)
-                    .map_err(state_error)?;
+                    .map_err(normalization_error)?;
                 self.streams.push(blueprint);
             }
             RecordRoute::Envelope => {
-                let source = self.normalizer.prepare(record).map_err(state_error)?;
+                let source = self
+                    .normalizer
+                    .prepare(record)
+                    .map_err(normalization_error)?;
                 self.sources.push(source);
             }
             RecordRoute::Other => {}
@@ -286,6 +317,14 @@ impl SealedTrace {
             .map(|schedule| schedule.prefix_len)
     }
 
+    /// Number of publisher streams visible at one schedule record.
+    #[must_use]
+    pub fn schedule_stream_prefix(&self, index: usize) -> Option<usize> {
+        self.schedules
+            .get(index)
+            .map(|schedule| schedule.stream_prefix_len)
+    }
+
     /// Materialize one validated fault schedule in deterministic delivery order.
     ///
     /// The operation retains tombstones for dropped occurrences, shares each
@@ -308,7 +347,63 @@ impl SealedTrace {
                 count: self.schedules.len(),
                 actual: index,
             })?;
-        materialize_schedule(plan, &self.sources, &self.source_streams, &self.limits)
+        materialize_schedule(
+            plan,
+            &self.sources,
+            &self.source_streams,
+            self.streams.len(),
+            &self.limits,
+        )
+    }
+
+    /// Execute and compare the pristine and faulted views of one schedule.
+    ///
+    /// The pristine side admits occurrence zero in physical source order. The
+    /// faulted side admits the deterministic materialized order. Both sides use
+    /// fresh states for exactly the stream and source prefixes visible at the
+    /// schedule record.
+    ///
+    /// If `S` streams are visible, both executions retain `S` bounded states
+    /// and both finalized summary sets while the verdicts are built. Schedule
+    /// materialization retains its documented `P`/`A`/`C` bounds; every state
+    /// fold remains capped by [`Limits`]. A zero-stream result has no per-stream
+    /// verdicts and is not an aggregate convergence claim.
+    ///
+    /// # Errors
+    ///
+    /// Returns a stable schedule-index, materialization, execution-capacity,
+    /// routing, or state-fold error. A hard fold error is never converted into
+    /// a convergence verdict.
+    pub fn compare_schedule(&self, index: usize) -> Result<ScheduleComparison, Error> {
+        let plan = self
+            .schedules
+            .get(index)
+            .ok_or(Error::ScheduleIndexOutOfRange {
+                count: self.schedules.len(),
+                actual: index,
+            })?;
+        let materialized = self.materialize(index)?;
+        let pristine = self.execute(
+            ExecutionMode::Pristine,
+            Arc::clone(&plan.id),
+            plan.stream_prefix_len,
+            plan.prefix_len,
+            self.source_streams[..plan.prefix_len]
+                .iter()
+                .copied()
+                .zip(&self.sources[..plan.prefix_len]),
+        )?;
+        let faulted = self.execute(
+            ExecutionMode::Faulted,
+            Arc::clone(&plan.id),
+            plan.stream_prefix_len,
+            plan.prefix_len,
+            materialized
+                .deliveries()
+                .iter()
+                .map(|delivery| (delivery.stream_index(), delivery.source())),
+        )?;
+        ScheduleComparison::new(pristine, faulted)
     }
 
     /// Start a fresh empty state for one stream in the sealed manifest.
@@ -389,6 +484,64 @@ impl SealedTrace {
             schedules,
         })
     }
+
+    fn execute<'source, I>(
+        &self,
+        mode: ExecutionMode,
+        schedule_id: Arc<str>,
+        stream_prefix: usize,
+        source_prefix: usize,
+        deliveries: I,
+    ) -> Result<ScenarioExecution, Error>
+    where
+        I: IntoIterator<Item = (usize, &'source Arc<PreparedEnvelope>)>,
+    {
+        if stream_prefix > self.streams.len() || source_prefix > self.sources.len() {
+            return Err(Error::ExecutionInvariant);
+        }
+        let mut states = Vec::new();
+        states
+            .try_reserve_exact(stream_prefix)
+            .map_err(|_| Error::ExecutionCapacity)?;
+        for (stream, blueprint) in self.streams[..stream_prefix].iter().enumerate() {
+            states.push(
+                blueprint
+                    .start(&self.sealed)
+                    .map_err(|error| execution_state_error(mode, stream, error))?,
+            );
+        }
+
+        let mut delivery_count = 0_usize;
+        for (stream, source) in deliveries {
+            let state = states.get_mut(stream).ok_or(Error::ExecutionInvariant)?;
+            state
+                .admit(Arc::clone(source))
+                .map_err(|error| execution_state_error(mode, stream, error))?;
+            delivery_count = delivery_count
+                .checked_add(1)
+                .ok_or(Error::ExecutionInvariant)?;
+        }
+
+        let mut summaries = Vec::new();
+        summaries
+            .try_reserve_exact(stream_prefix)
+            .map_err(|_| Error::ExecutionCapacity)?;
+        for (stream, state) in states.into_iter().enumerate() {
+            summaries.push(
+                state
+                    .finish(&self.sealed)
+                    .map_err(|error| execution_state_error(mode, stream, error))?,
+            );
+        }
+        Ok(ScenarioExecution {
+            mode,
+            schedule_id,
+            stream_prefix,
+            source_prefix,
+            delivery_count,
+            streams: summaries.into_boxed_slice(),
+        })
+    }
 }
 
 /// One stable delivery occurrence in a materialized fault schedule.
@@ -432,6 +585,7 @@ impl ScheduledDelivery {
 /// Immutable deterministic result of one validated fault schedule.
 pub struct MaterializedSchedule {
     schedule_id: Arc<str>,
+    stream_prefix: usize,
     source_prefix: usize,
     allocated_occurrences: usize,
     deliveries: Box<[ScheduledDelivery]>,
@@ -442,6 +596,12 @@ impl MaterializedSchedule {
     #[must_use]
     pub fn schedule_id(&self) -> &str {
         self.schedule_id.as_ref()
+    }
+
+    /// Number of publisher streams visible at the schedule record.
+    #[must_use]
+    pub const fn stream_prefix(&self) -> usize {
+        self.stream_prefix
     }
 
     /// Number of physical sources visible at the schedule record.
@@ -469,13 +629,239 @@ impl MaterializedSchedule {
     }
 }
 
+/// Which side of one pristine/faulted schedule comparison was executed.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum ExecutionMode {
+    /// Physical occurrence-zero source order.
+    Pristine,
+    /// Deterministically materialized fault order.
+    Faulted,
+}
+
+/// Final per-stream states from one side of a schedule execution.
+pub struct ScenarioExecution {
+    mode: ExecutionMode,
+    schedule_id: Arc<str>,
+    stream_prefix: usize,
+    source_prefix: usize,
+    delivery_count: usize,
+    streams: Box<[StreamSummary]>,
+}
+
+impl ScenarioExecution {
+    /// Pristine or faulted execution side.
+    #[must_use]
+    pub const fn mode(&self) -> ExecutionMode {
+        self.mode
+    }
+
+    /// Trace-local schedule identity shared by both sides.
+    #[must_use]
+    pub fn schedule_id(&self) -> &str {
+        self.schedule_id.as_ref()
+    }
+
+    /// Publisher streams visible at the schedule record.
+    #[must_use]
+    pub const fn stream_prefix(&self) -> usize {
+        self.stream_prefix
+    }
+
+    /// Physical source envelopes visible at the schedule record.
+    #[must_use]
+    pub const fn source_prefix(&self) -> usize {
+        self.source_prefix
+    }
+
+    /// Deliveries admitted on this execution side.
+    #[must_use]
+    pub const fn delivery_count(&self) -> usize {
+        self.delivery_count
+    }
+
+    /// Number of finalized stream summaries.
+    #[must_use]
+    pub fn stream_count(&self) -> usize {
+        self.streams.len()
+    }
+
+    /// Final state for one visible stream ordinal.
+    #[must_use]
+    pub fn stream(&self, index: usize) -> Option<&StreamSummary> {
+        self.streams.get(index)
+    }
+}
+
+/// Eligibility-aware result for one publisher stream.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ConvergenceVerdict {
+    /// Both eligible views have the same canonical scope and membership.
+    Converged,
+    /// Both eligible views reached the same frontier but membership differs.
+    Diverged,
+    /// Available evidence cannot support a convergence claim.
+    Ineligible,
+}
+
+/// Content-free reasons a per-stream comparison was ineligible.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct Ineligibility(u8);
+
+impl Ineligibility {
+    const PRISTINE_INEXACT: u8 = 1 << 0;
+    const FAULTED_INEXACT: u8 = 1 << 1;
+    const FRONTIER_MISMATCH: u8 = 1 << 2;
+
+    /// The pristine side was not exact and authoritative at EOF.
+    #[must_use]
+    pub const fn pristine_inexact(self) -> bool {
+        self.0 & Self::PRISTINE_INEXACT != 0
+    }
+
+    /// The faulted side was not exact and authoritative at EOF.
+    #[must_use]
+    pub const fn faulted_inexact(self) -> bool {
+        self.0 & Self::FAULTED_INEXACT != 0
+    }
+
+    /// The two sides finalized at different logical frontiers.
+    #[must_use]
+    pub const fn frontier_mismatch(self) -> bool {
+        self.0 & Self::FRONTIER_MISMATCH != 0
+    }
+
+    /// Whether no ineligibility reason is active.
+    #[must_use]
+    pub const fn is_empty(self) -> bool {
+        self.0 == 0
+    }
+}
+
+/// Verdict and eligibility facts for one stream ordinal.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct StreamComparison {
+    verdict: ConvergenceVerdict,
+    ineligibility: Ineligibility,
+}
+
+impl StreamComparison {
+    /// Eligibility-aware convergence verdict.
+    #[must_use]
+    pub const fn verdict(self) -> ConvergenceVerdict {
+        self.verdict
+    }
+
+    /// Reasons populated only for an ineligible verdict.
+    #[must_use]
+    pub const fn ineligibility(self) -> Ineligibility {
+        self.ineligibility
+    }
+}
+
+/// Pristine/faulted executions plus one verdict per visible stream.
+pub struct ScheduleComparison {
+    pristine: ScenarioExecution,
+    faulted: ScenarioExecution,
+    streams: Box<[StreamComparison]>,
+}
+
+impl ScheduleComparison {
+    /// Unfaulted occurrence-zero execution.
+    #[must_use]
+    pub const fn pristine(&self) -> &ScenarioExecution {
+        &self.pristine
+    }
+
+    /// Materialized fault execution.
+    #[must_use]
+    pub const fn faulted(&self) -> &ScenarioExecution {
+        &self.faulted
+    }
+
+    /// Number of visible per-stream verdicts.
+    #[must_use]
+    pub fn stream_count(&self) -> usize {
+        self.streams.len()
+    }
+
+    /// Verdict for one visible stream ordinal.
+    #[must_use]
+    pub fn stream(&self, index: usize) -> Option<StreamComparison> {
+        self.streams.get(index).copied()
+    }
+
+    fn new(pristine: ScenarioExecution, faulted: ScenarioExecution) -> Result<Self, Error> {
+        if pristine.mode != ExecutionMode::Pristine
+            || faulted.mode != ExecutionMode::Faulted
+            || pristine.schedule_id != faulted.schedule_id
+            || pristine.stream_prefix != faulted.stream_prefix
+            || pristine.source_prefix != faulted.source_prefix
+            || pristine.streams.len() != faulted.streams.len()
+        {
+            return Err(Error::ExecutionInvariant);
+        }
+        let mut streams = Vec::new();
+        streams
+            .try_reserve_exact(pristine.streams.len())
+            .map_err(|_| Error::ExecutionCapacity)?;
+        for (pristine_stream, faulted_stream) in pristine.streams.iter().zip(&faulted.streams) {
+            streams.push(compare_streams(pristine_stream, faulted_stream));
+        }
+        Ok(Self {
+            pristine,
+            faulted,
+            streams: streams.into_boxed_slice(),
+        })
+    }
+}
+
+fn compare_streams(pristine: &StreamSummary, faulted: &StreamSummary) -> StreamComparison {
+    let mut ineligibility = Ineligibility::default();
+    if !eligible_summary(pristine) {
+        ineligibility.0 |= Ineligibility::PRISTINE_INEXACT;
+    }
+    if !eligible_summary(faulted) {
+        ineligibility.0 |= Ineligibility::FAULTED_INEXACT;
+    }
+    if pristine.frontier() != faulted.frontier() {
+        ineligibility.0 |= Ineligibility::FRONTIER_MISMATCH;
+    }
+    let verdict = if !ineligibility.is_empty() {
+        ConvergenceVerdict::Ineligible
+    } else if pristine.cache_view() == faulted.cache_view() {
+        ConvergenceVerdict::Converged
+    } else {
+        ConvergenceVerdict::Diverged
+    };
+    StreamComparison {
+        verdict,
+        ineligibility,
+    }
+}
+
+fn eligible_summary(summary: &StreamSummary) -> bool {
+    summary.certainty() == state::Certainty::Exact
+        && summary.view_authoritative()
+        && summary.unknown_reasons().is_empty()
+        && summary.pending_envelopes() == 0
+        && summary.pending_canonical_bytes() == 0
+}
+
 fn materialize_schedule(
     plan: &SchedulePlan,
     sources: &[Arc<PreparedEnvelope>],
     source_streams: &[usize],
+    stream_count: usize,
     limits: &Limits,
 ) -> Result<MaterializedSchedule, Error> {
-    if plan.prefix_len > sources.len() || sources.len() != source_streams.len() {
+    if plan.prefix_len > sources.len()
+        || sources.len() != source_streams.len()
+        || plan.stream_prefix_len > stream_count
+        || source_streams[..plan.prefix_len]
+            .iter()
+            .any(|stream| *stream >= plan.stream_prefix_len)
+    {
         return Err(Error::MaterializationInvariant);
     }
     let mut allocated = plan.prefix_len;
@@ -508,6 +894,7 @@ fn materialize_schedule(
     let deliveries = arena.materialize(sources, source_streams, plan.prefix_len)?;
     Ok(MaterializedSchedule {
         schedule_id: Arc::clone(&plan.id),
+        stream_prefix: plan.stream_prefix_len,
         source_prefix: plan.prefix_len,
         allocated_occurrences: allocated,
         deliveries,
@@ -743,8 +1130,20 @@ fn trace_error(error: trace::Error) -> Error {
     Error::Trace { error }
 }
 
+fn normalization_error(error: state::Error) -> Error {
+    Error::Normalization { error }
+}
+
 fn state_error(error: state::Error) -> Error {
     Error::State { error }
+}
+
+fn execution_state_error(mode: ExecutionMode, stream: usize, error: state::Error) -> Error {
+    Error::ExecutionState {
+        mode,
+        stream,
+        error,
+    }
 }
 
 #[cfg(test)]
@@ -753,12 +1152,15 @@ mod tests {
 
     use proptest::prelude::*;
 
-    use super::{DeliveryArena, Error, ScheduledDelivery, TraceAssembler};
+    use super::{
+        ConvergenceVerdict, DeliveryArena, Error, ExecutionMode, ScheduledDelivery, TraceAssembler,
+    };
     use crate::{
         TRACE_FORMAT_VERSION,
         ir::{
-            Baseline, DecimalU64, DeliveryRef, EventEnvelope, FaultAction, FaultSchedule, Origin,
-            Record, RedactionMode, StreamDeclaration, TraceHeader, ValidatedRecord,
+            Baseline, CacheGroup, DecimalU64, DeliveryRef, EventEnvelope, FaultAction,
+            FaultSchedule, Mutation, OpaqueHash, Origin, Record, RedactionMode, StorageMedium,
+            StreamDeclaration, TraceHeader, ValidatedRecord,
         },
         limits::Limits,
         state::{BaselineAuthority, Certainty, Error as StateError},
@@ -810,13 +1212,23 @@ mod tests {
     }
 
     fn envelope_named(limits: &Limits, envelope_id: &str, stream_id: &str) -> ValidatedRecord {
+        envelope_named_at(limits, envelope_id, stream_id, 0, Vec::new())
+    }
+
+    fn envelope_named_at(
+        limits: &Limits,
+        envelope_id: &str,
+        stream_id: &str,
+        cursor: u64,
+        mutations: Vec<Mutation>,
+    ) -> ValidatedRecord {
         validated(
             Record::Envelope(EventEnvelope {
                 envelope_id: envelope_id.to_owned(),
                 stream_id: stream_id.to_owned(),
-                cursor: DecimalU64::new(0),
+                cursor: DecimalU64::new(cursor),
                 origin: Origin::Live,
-                mutations: Vec::new(),
+                mutations,
                 extensions: BTreeMap::new(),
             }),
             limits,
@@ -856,6 +1268,22 @@ mod tests {
         DeliveryRef {
             envelope_id: envelope_id.to_owned(),
             occurrence,
+        }
+    }
+
+    fn store(value: u64) -> Mutation {
+        Mutation::StoreRun {
+            hashes: vec![OpaqueHash::U64 {
+                value: DecimalU64::new(value),
+            }],
+            lineage: None,
+            token_count: None,
+            token_evidence: None,
+            block_size: None,
+            group: CacheGroup::Unspecified,
+            medium: StorageMedium::Unspecified,
+            block_metadata: None,
+            metadata: BTreeMap::new(),
         }
     }
 
@@ -925,15 +1353,19 @@ mod tests {
         assert_eq!(sealed.source_id(0), Some("source-z"));
         assert_eq!(sealed.source_id(1), Some("source-a"));
         assert_eq!(sealed.schedule_id(0), Some("first"));
+        assert_eq!(sealed.schedule_stream_prefix(0), Some(1));
         assert_eq!(sealed.schedule_source_prefix(0), Some(1));
         assert_eq!(sealed.schedule_id(1), Some("second"));
+        assert_eq!(sealed.schedule_stream_prefix(1), Some(2));
         assert_eq!(sealed.schedule_source_prefix(1), Some(2));
 
         let first = sealed.materialize(0).unwrap();
+        assert_eq!(first.stream_prefix(), 1);
         assert_eq!(first.allocated_occurrences(), 1);
         assert_eq!(first.delivery_count(), 1);
         assert_eq!(first.deliveries()[0].envelope_id(), "source-z");
         let second = sealed.materialize(1).unwrap();
+        assert_eq!(second.stream_prefix(), 2);
         assert_eq!(second.allocated_occurrences(), 2);
         assert!(
             second
@@ -966,6 +1398,15 @@ mod tests {
         assert_eq!(summaries[1].certainty(), Certainty::Unknown);
         assert_eq!(summaries[0].frontier(), Some(0));
         assert_eq!(summaries[1].frontier(), Some(0));
+
+        let first_comparison = sealed.compare_schedule(0).unwrap();
+        assert_eq!(first_comparison.stream_count(), 1);
+        assert_eq!(
+            first_comparison.stream(0).unwrap().verdict(),
+            ConvergenceVerdict::Converged
+        );
+        let second_comparison = sealed.compare_schedule(1).unwrap();
+        assert_eq!(second_comparison.stream_count(), 2);
     }
 
     #[test]
@@ -986,6 +1427,38 @@ mod tests {
         assert_eq!(materialized.source_prefix(), 0);
         assert_eq!(materialized.allocated_occurrences(), 0);
         assert!(materialized.deliveries().is_empty());
+    }
+
+    #[test]
+    fn corrupted_internal_stream_prefix_fails_closed_before_execution() {
+        let limits = Limits::default();
+        let mut assembler = TraceAssembler::new(limits).unwrap();
+        assembler.push(header(&limits), None).unwrap();
+        for stream_id in ["a", "b"] {
+            assembler
+                .push(
+                    stream_named(&limits, stream_id, Baseline::EmptyAtEngineStart),
+                    Some(BaselineAuthority::TrustDeclaredEmpty),
+                )
+                .unwrap();
+        }
+        assembler
+            .push(envelope_named(&limits, "source-b", "b"), None)
+            .unwrap();
+        assembler
+            .push(empty_schedule(&limits, "snapshot"), None)
+            .unwrap();
+        let mut sealed = assembler.finish().unwrap();
+        sealed.schedules[0].stream_prefix_len = 1;
+
+        assert_eq!(
+            sealed.materialize(0).err(),
+            Some(Error::MaterializationInvariant)
+        );
+        assert_eq!(
+            sealed.compare_schedule(0).err(),
+            Some(Error::MaterializationInvariant)
+        );
     }
 
     #[test]
@@ -1114,6 +1587,443 @@ mod tests {
                         && left.envelope_id() == right.envelope_id()
                         && Arc::ptr_eq(left.source(), right.source())
                 })
+        );
+    }
+
+    #[test]
+    fn pristine_and_faulted_dense_folds_converge_despite_transport_diagnostics() {
+        let limits = Limits::default();
+        let mut assembler = TraceAssembler::new(limits).unwrap();
+        assembler.push(header(&limits), None).unwrap();
+        assembler
+            .push(
+                stream(&limits, Baseline::EmptyAtEngineStart),
+                Some(BaselineAuthority::TrustDeclaredEmpty),
+            )
+            .unwrap();
+        for (id, cursor, value) in [("e0", 0, 101), ("e1", 1, 102), ("e2", 2, 103)] {
+            assembler
+                .push(
+                    envelope_named_at(&limits, id, "stream", cursor, vec![store(value)]),
+                    None,
+                )
+                .unwrap();
+        }
+        assembler
+            .push(
+                schedule_named(
+                    &limits,
+                    "reorder-and-duplicate",
+                    vec![
+                        FaultAction::Duplicate {
+                            target: delivery("e1", 0),
+                            copies: 1,
+                        },
+                        FaultAction::MoveBefore {
+                            target: delivery("e2", 0),
+                            anchor: delivery("e0", 0),
+                        },
+                    ],
+                ),
+                None,
+            )
+            .unwrap();
+
+        let sealed = assembler.finish().unwrap();
+        let comparison = sealed.compare_schedule(0).unwrap();
+        assert_eq!(comparison.pristine().mode(), ExecutionMode::Pristine);
+        assert_eq!(comparison.faulted().mode(), ExecutionMode::Faulted);
+        assert_eq!(comparison.pristine().schedule_id(), "reorder-and-duplicate");
+        assert_eq!(comparison.pristine().stream_prefix(), 1);
+        assert_eq!(comparison.pristine().source_prefix(), 3);
+        assert_eq!(comparison.pristine().delivery_count(), 3);
+        assert_eq!(comparison.faulted().delivery_count(), 4);
+        assert_eq!(comparison.stream_count(), 1);
+        let stream = comparison.stream(0).unwrap();
+        assert_eq!(stream.verdict(), ConvergenceVerdict::Converged);
+        assert!(stream.ineligibility().is_empty());
+
+        let pristine = comparison.pristine().stream(0).unwrap();
+        let faulted = comparison.faulted().stream(0).unwrap();
+        assert_eq!(pristine.certainty(), Certainty::Exact);
+        assert_eq!(faulted.certainty(), Certainty::Exact);
+        assert_eq!(pristine.frontier(), Some(2));
+        assert_eq!(faulted.frontier(), Some(2));
+        assert_eq!(pristine.cache_view().key_count(), 3);
+        assert!(pristine.cache_view() == faulted.cache_view());
+        assert_eq!(pristine.diagnostics().duplicates(), 0);
+        assert_eq!(faulted.diagnostics().duplicates(), 1);
+    }
+
+    #[test]
+    fn missing_evidence_and_frontier_mismatch_are_ineligible_not_divergent() {
+        let limits = Limits::default();
+        let mut assembler = TraceAssembler::new(limits).unwrap();
+        assembler.push(header(&limits), None).unwrap();
+        assembler
+            .push(
+                stream(&limits, Baseline::EmptyAtEngineStart),
+                Some(BaselineAuthority::TrustDeclaredEmpty),
+            )
+            .unwrap();
+        for (id, cursor) in [("e0", 0), ("e1", 1), ("e2", 2)] {
+            assembler
+                .push(
+                    envelope_named_at(&limits, id, "stream", cursor, vec![store(cursor)]),
+                    None,
+                )
+                .unwrap();
+        }
+        for (schedule_id, target) in [("middle", "e1"), ("tail", "e2")] {
+            assembler
+                .push(
+                    schedule_named(
+                        &limits,
+                        schedule_id,
+                        vec![FaultAction::Drop {
+                            target: delivery(target, 0),
+                        }],
+                    ),
+                    None,
+                )
+                .unwrap();
+        }
+        let sealed = assembler.finish().unwrap();
+
+        let middle = sealed.compare_schedule(0).unwrap().stream(0).unwrap();
+        assert_eq!(middle.verdict(), ConvergenceVerdict::Ineligible);
+        assert!(!middle.ineligibility().pristine_inexact());
+        assert!(middle.ineligibility().faulted_inexact());
+        assert!(middle.ineligibility().frontier_mismatch());
+
+        let tail = sealed.compare_schedule(1).unwrap().stream(0).unwrap();
+        assert_eq!(tail.verdict(), ConvergenceVerdict::Ineligible);
+        assert!(!tail.ineligibility().pristine_inexact());
+        assert!(!tail.ineligibility().faulted_inexact());
+        assert!(tail.ineligibility().frontier_mismatch());
+    }
+
+    #[test]
+    fn unknown_baselines_are_explicitly_ineligible_on_both_sides() {
+        let limits = Limits::default();
+        let mut assembler = TraceAssembler::new(limits).unwrap();
+        assembler.push(header(&limits), None).unwrap();
+        assembler
+            .push(
+                stream(&limits, Baseline::UnknownAtAttach),
+                Some(BaselineAuthority::TreatAsUnknown),
+            )
+            .unwrap();
+        assembler.push(envelope(&limits), None).unwrap();
+        assembler
+            .push(empty_schedule(&limits, "identity"), None)
+            .unwrap();
+
+        let sealed = assembler.finish().unwrap();
+        let stream = sealed.compare_schedule(0).unwrap().stream(0).unwrap();
+        assert_eq!(stream.verdict(), ConvergenceVerdict::Ineligible);
+        assert!(stream.ineligibility().pristine_inexact());
+        assert!(stream.ineligibility().faulted_inexact());
+        assert!(!stream.ineligibility().frontier_mismatch());
+    }
+
+    #[test]
+    fn eligible_same_frontier_views_can_diverge() {
+        let limits = Limits {
+            max_recent_fingerprints_per_stream: 0,
+            ..Limits::default()
+        };
+        let mut assembler = TraceAssembler::new(limits).unwrap();
+        assembler.push(header(&limits), None).unwrap();
+        assembler
+            .push(
+                stream(&limits, Baseline::EmptyAtEngineStart),
+                Some(BaselineAuthority::TrustDeclaredEmpty),
+            )
+            .unwrap();
+        assembler
+            .push(
+                envelope_named_at(&limits, "first", "stream", 0, vec![store(1)]),
+                None,
+            )
+            .unwrap();
+        assembler
+            .push(
+                envelope_named_at(&limits, "second", "stream", 0, vec![store(2)]),
+                None,
+            )
+            .unwrap();
+        assembler
+            .push(
+                schedule_named(
+                    &limits,
+                    "select-second",
+                    vec![FaultAction::Drop {
+                        target: delivery("first", 0),
+                    }],
+                ),
+                None,
+            )
+            .unwrap();
+
+        let sealed = assembler.finish().unwrap();
+        let comparison = sealed.compare_schedule(0).unwrap();
+        let stream = comparison.stream(0).unwrap();
+        assert_eq!(stream.verdict(), ConvergenceVerdict::Diverged);
+        assert!(stream.ineligibility().is_empty());
+        let pristine = comparison.pristine().stream(0).unwrap();
+        let faulted = comparison.faulted().stream(0).unwrap();
+        assert_eq!(pristine.certainty(), Certainty::Exact);
+        assert_eq!(faulted.certainty(), Certainty::Exact);
+        assert_eq!(pristine.frontier(), Some(0));
+        assert_eq!(faulted.frontier(), Some(0));
+        assert_eq!(pristine.diagnostics().stale_unverifiable(), 1);
+        assert!(pristine.cache_view() != faulted.cache_view());
+    }
+
+    #[test]
+    fn hard_fold_failure_is_not_converted_into_a_verdict() {
+        let limits = Limits {
+            max_cache_keys_per_stream: 0,
+            ..Limits::default()
+        };
+        let mut assembler = TraceAssembler::new(limits).unwrap();
+        assembler.push(header(&limits), None).unwrap();
+        assembler
+            .push(
+                stream(&limits, Baseline::EmptyAtEngineStart),
+                Some(BaselineAuthority::TrustDeclaredEmpty),
+            )
+            .unwrap();
+        assembler
+            .push(
+                envelope_named_at(&limits, "source", "stream", 0, vec![store(1)]),
+                None,
+            )
+            .unwrap();
+        assembler
+            .push(empty_schedule(&limits, "identity"), None)
+            .unwrap();
+        let sealed = assembler.finish().unwrap();
+
+        assert!(matches!(
+            sealed.compare_schedule(0),
+            Err(Error::ExecutionState {
+                mode: ExecutionMode::Pristine,
+                stream: 0,
+                error: StateError::ResourceLimit { .. }
+            })
+        ));
+    }
+
+    #[test]
+    fn faulted_only_hard_failure_reports_its_execution_side() {
+        let limits = Limits {
+            max_cache_keys_per_stream: 0,
+            max_recent_fingerprints_per_stream: 0,
+            ..Limits::default()
+        };
+        let mut assembler = TraceAssembler::new(limits).unwrap();
+        assembler.push(header(&limits), None).unwrap();
+        assembler
+            .push(
+                stream(&limits, Baseline::EmptyAtEngineStart),
+                Some(BaselineAuthority::TrustDeclaredEmpty),
+            )
+            .unwrap();
+        assembler
+            .push(
+                envelope_named_at(&limits, "empty", "stream", 0, Vec::new()),
+                None,
+            )
+            .unwrap();
+        assembler
+            .push(
+                envelope_named_at(&limits, "store", "stream", 0, vec![store(1)]),
+                None,
+            )
+            .unwrap();
+        assembler
+            .push(
+                schedule_named(
+                    &limits,
+                    "faulted-only",
+                    vec![FaultAction::Drop {
+                        target: delivery("empty", 0),
+                    }],
+                ),
+                None,
+            )
+            .unwrap();
+        let sealed = assembler.finish().unwrap();
+
+        assert!(matches!(
+            sealed.compare_schedule(0),
+            Err(Error::ExecutionState {
+                mode: ExecutionMode::Faulted,
+                stream: 0,
+                error: StateError::ResourceLimit { .. }
+            })
+        ));
+    }
+
+    #[test]
+    fn stream_visible_before_schedule_excludes_its_later_first_envelope() {
+        let limits = Limits::default();
+        let mut assembler = TraceAssembler::new(limits).unwrap();
+        assembler.push(header(&limits), None).unwrap();
+        assembler
+            .push(
+                stream(&limits, Baseline::EmptyAtEngineStart),
+                Some(BaselineAuthority::TrustDeclaredEmpty),
+            )
+            .unwrap();
+        assembler
+            .push(empty_schedule(&limits, "before-source"), None)
+            .unwrap();
+        assembler.push(envelope(&limits), None).unwrap();
+        let sealed = assembler.finish().unwrap();
+
+        let comparison = sealed.compare_schedule(0).unwrap();
+        assert_eq!(comparison.stream_count(), 1);
+        assert_eq!(comparison.pristine().source_prefix(), 0);
+        assert_eq!(comparison.pristine().delivery_count(), 0);
+        assert_eq!(comparison.faulted().delivery_count(), 0);
+        assert_eq!(
+            comparison.stream(0).unwrap().verdict(),
+            ConvergenceVerdict::Converged
+        );
+        assert_eq!(comparison.pristine().stream(0).unwrap().frontier(), None);
+    }
+
+    #[test]
+    fn zero_stream_comparison_has_no_aggregate_verdict() {
+        let limits = Limits::default();
+        let mut assembler = TraceAssembler::new(limits).unwrap();
+        assembler.push(header(&limits), None).unwrap();
+        assembler
+            .push(empty_schedule(&limits, "empty"), None)
+            .unwrap();
+        let sealed = assembler.finish().unwrap();
+
+        let comparison = sealed.compare_schedule(0).unwrap();
+        assert_eq!(comparison.stream_count(), 0);
+        assert_eq!(comparison.pristine().stream_count(), 0);
+        assert_eq!(comparison.faulted().stream_count(), 0);
+        assert_eq!(comparison.pristine().delivery_count(), 0);
+        assert_eq!(comparison.faulted().delivery_count(), 0);
+        assert_eq!(comparison.stream(0), None);
+    }
+
+    #[test]
+    fn visible_empty_streams_are_compared_but_later_streams_are_excluded() {
+        let limits = Limits::default();
+        let mut assembler = TraceAssembler::new(limits).unwrap();
+        assembler.push(header(&limits), None).unwrap();
+        for stream_id in ["empty", "active"] {
+            assembler
+                .push(
+                    stream_named(&limits, stream_id, Baseline::EmptyAtEngineStart),
+                    Some(BaselineAuthority::TrustDeclaredEmpty),
+                )
+                .unwrap();
+        }
+        assembler
+            .push(envelope_named(&limits, "source", "active"), None)
+            .unwrap();
+        assembler
+            .push(empty_schedule(&limits, "snapshot"), None)
+            .unwrap();
+        assembler
+            .push(
+                stream_named(&limits, "later", Baseline::EmptyAtEngineStart),
+                Some(BaselineAuthority::TrustDeclaredEmpty),
+            )
+            .unwrap();
+
+        let sealed = assembler.finish().unwrap();
+        let comparison = sealed.compare_schedule(0).unwrap();
+        assert_eq!(comparison.stream_count(), 2);
+        assert_eq!(comparison.pristine().stream_prefix(), 2);
+        assert_eq!(comparison.pristine().source_prefix(), 1);
+        assert_eq!(
+            comparison.stream(0).unwrap().verdict(),
+            ConvergenceVerdict::Converged
+        );
+        assert_eq!(
+            comparison.stream(1).unwrap().verdict(),
+            ConvergenceVerdict::Converged
+        );
+        assert_eq!(comparison.pristine().stream(0).unwrap().frontier(), None);
+        assert_eq!(comparison.pristine().stream(1).unwrap().frontier(), Some(0));
+    }
+
+    #[test]
+    fn interleaved_cross_stream_faults_preserve_routing_and_independent_verdicts() {
+        let limits = Limits::default();
+        let mut assembler = TraceAssembler::new(limits).unwrap();
+        assembler.push(header(&limits), None).unwrap();
+        for stream_id in ["a", "b"] {
+            assembler
+                .push(
+                    stream_named(&limits, stream_id, Baseline::EmptyAtEngineStart),
+                    Some(BaselineAuthority::TrustDeclaredEmpty),
+                )
+                .unwrap();
+        }
+        for (id, stream_id, cursor, value) in [
+            ("a0", "a", 0, 10),
+            ("b0", "b", 0, 20),
+            ("a1", "a", 1, 11),
+            ("b1", "b", 1, 21),
+        ] {
+            assembler
+                .push(
+                    envelope_named_at(&limits, id, stream_id, cursor, vec![store(value)]),
+                    None,
+                )
+                .unwrap();
+        }
+        assembler
+            .push(
+                schedule_named(
+                    &limits,
+                    "cross-stream",
+                    vec![
+                        FaultAction::Drop {
+                            target: delivery("a1", 0),
+                        },
+                        FaultAction::MoveBefore {
+                            target: delivery("b1", 0),
+                            anchor: delivery("a0", 0),
+                        },
+                    ],
+                ),
+                None,
+            )
+            .unwrap();
+        let sealed = assembler.finish().unwrap();
+
+        let comparison = sealed.compare_schedule(0).unwrap();
+        assert_eq!(comparison.stream_count(), 2);
+        assert_eq!(comparison.pristine().delivery_count(), 4);
+        assert_eq!(comparison.faulted().delivery_count(), 3);
+        let a = comparison.stream(0).unwrap();
+        assert_eq!(a.verdict(), ConvergenceVerdict::Ineligible);
+        assert!(a.ineligibility().frontier_mismatch());
+        assert_eq!(comparison.pristine().stream(0).unwrap().frontier(), Some(1));
+        assert_eq!(comparison.faulted().stream(0).unwrap().frontier(), Some(0));
+        let b = comparison.stream(1).unwrap();
+        assert_eq!(b.verdict(), ConvergenceVerdict::Converged);
+        assert_eq!(comparison.faulted().stream(1).unwrap().frontier(), Some(1));
+        assert_eq!(
+            comparison
+                .faulted()
+                .stream(1)
+                .unwrap()
+                .cache_view()
+                .key_count(),
+            2
         );
     }
 
@@ -1287,7 +2197,7 @@ mod tests {
                     Some(BaselineAuthority::TrustDeclaredEmpty),
                 )
                 .unwrap_err(),
-            Error::State {
+            Error::Normalization {
                 error: StateError::BaselineAuthorityMismatch
             }
         );
@@ -1323,6 +2233,13 @@ mod tests {
             sealed.materialize(9).err().unwrap().code(),
             "schedule_index_out_of_range"
         );
+        assert_eq!(
+            sealed.compare_schedule(9).err(),
+            Some(Error::ScheduleIndexOutOfRange {
+                count: 0,
+                actual: 9
+            })
+        );
     }
 
     #[test]
@@ -1344,10 +2261,16 @@ mod tests {
                 "trace_validation",
             ),
             (
-                Error::State {
+                Error::Normalization {
                     error: StateError::NormalizerFailed,
                 },
                 "trace_normalization",
+            ),
+            (
+                Error::State {
+                    error: StateError::StateFailed,
+                },
+                "state_operation",
             ),
             (Error::AssemblyInvariant, "assembly_invariant"),
             (Error::AssemblyCapacity, "assembly_capacity"),
@@ -1367,6 +2290,16 @@ mod tests {
             ),
             (Error::MaterializationCapacity, "materialization_capacity"),
             (Error::MaterializationInvariant, "materialization_invariant"),
+            (Error::ExecutionCapacity, "execution_capacity"),
+            (Error::ExecutionInvariant, "execution_invariant"),
+            (
+                Error::ExecutionState {
+                    mode: ExecutionMode::Faulted,
+                    stream: 0,
+                    error: StateError::StateFailed,
+                },
+                "execution_state",
+            ),
         ];
 
         for (error, expected) in errors {
