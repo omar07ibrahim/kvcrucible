@@ -55,3 +55,6 @@ jobs:
 
       - name: Exercise machine-readable contract
         run: ./target/x86_64-unknown-linux-musl/release/kvcrucible contract --format json
+
+      - name: Verify visual evidence freshness
+        run: python3 tools/render_readme_visuals.py --check
