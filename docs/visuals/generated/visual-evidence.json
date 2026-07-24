@@ -24,6 +24,14 @@
       "command": "cargo fmt --all --check",
       "result": "pass"
     },
+    "linkage": {
+      "command": "readelf --program-headers --wide target/x86_64-unknown-linux-musl/release/kvcrucible",
+      "result": "pass"
+    },
+    "release": {
+      "command": "cargo build --release --target x86_64-unknown-linux-musl --locked",
+      "result": "pass"
+    },
     "rustc": {
       "command": "rustc --version",
       "stdout_sha256": "ac31499b5910ed7ddbf1a62e57e03c1d0ca49fa78efc075b291afa8d192a4d44"
@@ -74,7 +82,9 @@
   },
   "quality_gate": {
     "clippy": "pass",
+    "dynamic_interpreter": "absent",
     "format": "pass",
+    "static_musl_release": "pass",
     "tests": {
       "failed": 0,
       "filtered": 0,

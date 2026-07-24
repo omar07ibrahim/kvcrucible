@@ -3,7 +3,8 @@ KVCrucible evidence summary
 Toolchain: rustc 1.97.0 (2d8144b78 2026-07-07)
 Trace format: kvcrucible.trace/v1alpha1
 Fixture kind: synthetic, offline, CPU-only
-Quality gate: format pass; Clippy pass; 137 tests pass; 0 fail
+Quality gate: format pass; Clippy pass; 137 tests pass; 0 failures observed
+Release target: x86_64-unknown-linux-musl build pass; no INTERP header
 
 Observed verdicts:
 - synthetic/reorder-and-duplicate: Converged; pristine=Exact@2 (3 keys/3 deliveries); faulted=Exact@2 (3 keys/4 deliveries)

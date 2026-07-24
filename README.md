@@ -1,135 +1,107 @@
 # KVCrucible
 
-KVCrucible is an offline conformance lab for recovering LLM KV-cache metadata
-from unreliable event streams.
+Offline conformance evidence for unreliable LLM KV-cache event streams.
 
-Modern inference routers consume cache events to estimate which worker already
-holds a prompt prefix. That view can become subtly wrong when a consumer joins
-late, misses a bounded replay window, receives a duplicate, observes a restart,
-or mistakes a publisher-local sequence for a global one. KVCrucible turns
-delivered traces into explicit, bounded uncertainty, materializes deterministic
-fault executions, and compares fresh pristine and faulted folds per visible
-publisher stream. Explicit replay request/outcome/expiry orchestration and
-witness reduction remain pending.
+KVCrucible answers a narrow but operationally important question: after a
+consumer joins late, misses an event, sees a duplicate, or observes reordered
+delivery, what can it still truthfully claim about its cache view?
 
-This is not a serving engine, a throughput simulator, or a claim that vLLM or
-Dynamo is formally verified.
+It turns a bounded canonical trace into explicit `Exact`, `Recovering`, or
+`Unknown` state, executes deterministic drop/duplicate/reorder schedules, and
+compares fresh pristine and faulted folds without importing a serving engine or
+inspecting GPU memory.
 
-> **Status:** the typed IR, bounded streaming canonical JSONL codec, incremental
-> structural validator, internal non-exported semantic fingerprinting, and
-> bounded tri-state cache-view fold are implemented. A coordinated assembler
-> now seals validated records, normalized sources, stream blueprints, and opaque
-> numeric fault plans into one capability. Its bounded linked-list materializer
-> executes deterministic drop, duplicate, and reorder actions without copying
-> source payloads. A first-class oracle now returns `Converged`, `Diverged`, or
-> `Ineligible` per stream without treating incomplete evidence as failure.
-> Replay orchestration, witness reduction, reports, and a production-engine
-> adapter are next.
+> **Current boundary:** bounded JSONL ingestion, structural validation,
+> session-bound semantic fingerprints, tri-state cache folding, deterministic
+> fault materialization, and an eligibility-aware `Converged` / `Diverged` /
+> `Ineligible` oracle are implemented. Replay orchestration, witness reduction,
+> stable report commands, and a production-engine adapter are not.
 
-## The problem
+[![CI](https://github.com/omar07ibrahim/kvcrucible/actions/workflows/ci.yml/badge.svg)](https://github.com/omar07ibrahim/kvcrucible/actions/workflows/ci.yml)
+![Rust 1.97](https://img.shields.io/badge/Rust-1.97-000000?logo=rust)
+![License Apache--2.0](https://img.shields.io/badge/license-Apache--2.0-blue)
 
-A cache-event consumer has at least three materially different states:
+[![Verified KVCrucible terminal evidence](docs/visuals/generated/terminal-evidence.svg)](docs/visuals/generated/terminal-evidence.svg)
 
-- **exact** — its view follows an externally trusted baseline or clear anchor
-  with no active gap, equivocation, or unavailable evidence;
-- **recovering** — it retains a bounded clean gap and awaits missing delivery;
-- **unknown** — missing or conflicting history prevents an authoritative
-  complete view.
+The terminal visual is generated from fresh executable stdout, not a hand-made
+mockup. The same run produces
+[machine-readable evidence](docs/visuals/generated/visual-evidence.json),
+[a plain summary](docs/visuals/generated/evidence-summary.txt),
+[the complete transcript](docs/visuals/generated/terminal-transcript.txt), and
+[a SHA-256 manifest](docs/visuals/generated/manifest.sha256.json).
 
-Collapsing those states into “healthy” or “failed” creates false confidence. A
-late subscriber may continue building a useful partial view, but it cannot
-truthfully call that view complete. A duplicate store may be harmless, while
-the same cursor carrying a different payload is not.
+## What the current evidence proves
 
-The delivered-envelope fold already makes those distinctions executable. The
-sealed scenario layer now executes and compares schedule-prefix pristine and
-faulted folds, but does not issue or attribute replay requests. The current IR
-has no request identity, attempt outcome, response attribution, or expiry
-record, so replay is never inferred from cursor gaps or an `origin` flag.
+The checked synthetic corpus exercises the implemented trust boundary:
 
-## v0.1 contract
+- input is decoded and structurally validated under explicit finite limits;
+- one `TraceAssembler` binds validation and normalization to the same owned
+  records and becomes sticky-failed after any error;
+- executable schedules become available only after structural EOF validation
+  and normalization sealing both succeed;
+- fault plans materialize stable drop, duplicate, and reorder occurrences while
+  sharing immutable prepared sources;
+- pristine and faulted executions start from fresh stream states; and
+- incomplete evidence produces `Ineligible`, not a convenient false
+  `Diverged`.
 
-The first release will provide:
+It does **not** prove a serving engine correct, inspect tensor contents, infer
+allocator or reference-count state, benchmark routing, or claim compatibility
+with vLLM or Dynamo.
 
-- a bounded, engine-neutral JSONL trace format;
-- publisher-local cursor and externally declared epoch semantics;
-- deterministic drop, duplicate, reorder, and declared-boundary schedules;
-- replay recovery with explicit `exact`, `recovering`, and `unknown` states;
-- a convergence oracle against an unfaulted reference execution;
-- deterministic shrinking to a 1-minimal re-executable witness under a recorded
-  reduction order;
-- one version-pinned vLLM wire adapter backed by golden fixtures;
-- a static CPU-only CLI and machine-readable reports.
+[![KVCrucible implemented architecture](docs/visuals/generated/architecture.svg)](docs/visuals/generated/architecture.svg)
 
-It will not infer GPU allocation, reference counts, scheduler state, or tensor
-correctness from prefix-cache events. Those facts are not present in the event
-stream.
+The dashed layer at the bottom is deliberate: replay request/outcome records,
+1-minimal witness reduction, the pinned engine adapter, and a report CLI remain
+outside the implemented evidence.
 
-The detailed boundary lives in [the project charter](docs/charter.md), and the
-wire-independent data model lives in [the IR specification](spec/ir-v1.md).
+## Reproduce it locally
 
-## Intended workflow
+The repository pins Rust 1.97.0, including `rustfmt`, Clippy, and the
+`x86_64-unknown-linux-musl` target. The examples use synthetic traces and need
+no GPU, model download, paid API, or running service.
 
-```text
-version-pinned capture
-        │
-        ▼
-bounded adapter ──► canonical envelopes ──► pristine reference fold
-                              │                         │
-                              ├─► fault schedule        │
-                              │         │               │
-                              │         ▼               │
-                              └─► faulted fold ─────────┤
-                                        │              │
-                                        ▼              ▼
-                              certainty + diagnostics + convergence
-                                        │
-                                        ▼
-                                 1-minimal witness
-```
-
-Transport envelopes and cache mutations are separate layers. This prevents a
-transport gap from being misreported as a cache mutation bug.
-
-## Inspect the current contract
-
-The repository pins Rust. Native development commands work on the current host:
+[![KVCrucible local reproduction workflow](docs/visuals/generated/setup-workflow.svg)](docs/visuals/generated/setup-workflow.svg)
 
 ```bash
+rustup show active-toolchain
 cargo run -- contract
+cargo run --example delivered_fold
+cargo run --example fault_materialization
+cargo run --example verdict_matrix
+```
+
+`contract --format json` separates current capabilities, remaining v0.1 work,
+and non-goals for CI or downstream tooling:
+
+```bash
 cargo run -- contract --format json
 ```
 
-The JSON form separates current capabilities from the remaining v0.1 plan. It
-is intentionally suitable for CI assertions and future report metadata.
-
-## Run the implemented fold
-
-Slice 3 is a library API, with a small executable example that exercises the
-complete current trust boundary:
+Run the complete local quality and evidence gate:
 
 ```bash
-cargo run --example delivered_fold
+cargo fmt --all --check
+cargo clippy --all-targets --all-features --locked -- -D warnings
+cargo test --all-targets --all-features --locked
+cargo build --release --target x86_64-unknown-linux-musl --locked
+
+python3 tools/render_readme_visuals.py
+python3 tools/render_readme_visuals.py --check
 ```
 
-It decodes five bounded JSONL records, validates the complete trace, registers
-one stream blueprint, and prepares each source envelope. Only after sealing the
-normalization session does it start a fresh scenario state, apply an
-out-of-order delivery sequence, and finalize an exact three-key view:
+The generator executes the examples and quality gates before rebuilding the
+assets. It rejects unexpected output files, host-specific paths, common
+credential patterns, emails, and terminal escapes. Its manifest binds the
+relevant sources and every non-manifest generated output by SHA-256.
 
-```text
-Applied
-Buffered
-Applied
-certainty=Exact frontier=Some(2) keys=3
-```
+## Watch a fault schedule execute
 
-## Run fault materialization and convergence
+The fault demo validates and normalizes one trace, seals it, duplicates `e1`,
+moves `e2` before `e0`, folds the resulting stable occurrences, and compares
+that execution with the pristine physical order:
 
-The Slice 4 example validates and normalizes the same owned records, seals the
-complete trace, applies duplicate and reorder actions, folds the resulting
-stable occurrences without rehashing source payloads, and runs the first-class
-pristine/faulted comparison:
+[![KVCrucible deterministic fault execution](docs/visuals/generated/fault-timeline.svg)](docs/visuals/generated/fault-timeline.svg)
 
 ```bash
 cargo run --example fault_materialization
@@ -144,79 +116,117 @@ certainty=Exact frontier=Some(2) keys=3
 verdict=Converged pristine_deliveries=3 faulted_deliveries=4
 ```
 
-The test corpus also reaches `Diverged` and `Ineligible`; hard state-fold
-failures remain typed errors and are never converted into verdicts.
+`e2` is buffered until cursors `0` and `1` arrive. The extra `e1` occurrence is
+classified as a duplicate. Both sides then finish exact at frontier `2` with
+the same three-key view, so this schedule converges despite different transport
+history.
 
-The release gate builds a static Linux x86-64 binary explicitly:
+## Exercise every oracle outcome
+
+`verdict_matrix` executes three bounded synthetic traces and emits the complete
+facts as deterministic JSON:
 
 ```bash
-cargo build --release --target x86_64-unknown-linux-musl --locked
+cargo run --example verdict_matrix
 ```
 
-Other development hosts use their native target; the published Linux artifact
-never depends on that native build.
+[![KVCrucible eligibility-aware verdict matrix](docs/visuals/generated/verdict-matrix.svg)](docs/visuals/generated/verdict-matrix.svg)
 
-## Roadmap
+- **Converged:** both sides are eligible and their canonical cache views match.
+- **Diverged:** both sides are exact at the same frontier, but membership
+  differs.
+- **Ineligible:** one side is `Unknown` and the frontiers differ, so available
+  evidence cannot justify a convergence claim.
 
-Slices 1–3 are implemented and Slice 4 is in progress. The current core
-strictly decodes and encodes the IR, validates a trace incrementally,
-fingerprints each normalized mutation list under a session-wide work budget,
-and folds already delivered envelopes into a bounded per-stream cache view. Its
-coordinated assembler exposes numeric fault plans only after successful EOF and
-binds them to the exact owned records normalized in the same session. Its
-indexed linked-list executor retains drop tombstones, inserts stable duplicate
-blocks, and reorders in bounded memory; a property test compares it with a slow
-vector reference model. Fresh schedule-prefix pristine and faulted folds now
-produce fail-closed per-stream convergence verdicts. State tests cover
-deterministic transitions, equivocation, modeled gap exhaustion, clear-barrier
-recovery, and atomic rollback on hard failure.
+The fixtures are synthetic by design. They test KVCrucible's model and fault
+executor; they are not presented as captures from a production engine.
 
-| Slice | Status | Deliverable | Evidence gate |
-|---|---|---|---|
-| 1 | implemented | Charter, IR, threat model, static CLI | format, lint, test, release build |
-| 2 | implemented | Bounded IR ingestion and trace validation | golden vectors and adversarial limits |
-| 3 | implemented | Tri-state delivered-envelope fold | state-machine and property tests |
-| 4 | in progress | Plans, materialization, and per-stream oracle implemented; replay pending | faulted/pristine convergence corpus |
-| 5 | planned | Witness reducer and report CLI | deterministic 1-minimal regressions |
-| 6 | planned | Pinned vLLM adapter | upstream-derived fixtures and differential tests |
-| 7 | planned | v0.1 reproducibility release | end-to-end demo and compatibility matrix |
+## Exact, recovering, and unknown are different
 
-Dynamo tree-dump recovery and cache-aware routing counterfactuals are v0.2
-work. They will not be advertised as supported before their adapters and
-fixtures exist.
+A cache-event consumer can retain useful partial state without having enough
+evidence to call that state complete:
 
-## Design constraints
+- **Exact** follows a trusted baseline or clear anchor with no unresolved gap,
+  conflict, or unavailable evidence.
+- **Recovering** retains a bounded clean gap and waits for missing delivery.
+- **Unknown** means missing or conflicting history prevents an authoritative
+  complete view.
+
+[![KVCrucible verdict decision tree](docs/visuals/generated/certainty-decision.svg)](docs/visuals/generated/certainty-decision.svg)
+
+Hard fold failures stay typed errors; they are never converted into verdicts.
+An eligible comparison requires exact authoritative summaries at the same
+frontier. Only then can equal membership mean `Converged` or unequal membership
+mean `Diverged`.
+
+## Why the internal split matters
+
+Transport envelopes and cache mutations are separate layers. A cursor gap is a
+fact about delivered history, not proof that the engine mutated cache state
+incorrectly.
+
+The current core enforces several less-visible invariants:
+
+- sequence and epoch are scoped to one publisher stream, never globally;
+- cache hashes remain opaque and preserve their wire type;
+- semantic fingerprints exclude transport-only fields but remain ordered and
+  session-bound;
+- fault schedules snapshot the source and stream prefixes visible where the
+  schedule record appears;
+- duplicate occurrences share prepared source payloads rather than copying or
+  re-fingerprinting them;
+- cache-view updates are atomic under resource failure; and
+- the indexed materializer is property-tested against a slower vector reference
+  model.
+
+The wire-independent data model is specified in
+[IR v1](spec/ir-v1.md), while [semantics](spec/semantics.md) defines the
+publisher-local cursor, baseline, gap, clear-barrier, and verdict rules.
+
+## Implemented versus planned
+
+| Capability | Status | Evidence surface |
+|---|---|---|
+| Canonical bounded JSONL codec | implemented | golden/adversarial tests |
+| Incremental structural validator | implemented | typed errors and exact limit tests |
+| Session-bound semantic fingerprints | implemented | deterministic digest vectors |
+| `Exact` / `Recovering` / `Unknown` fold | implemented | `delivered_fold` and state corpus |
+| Drop/duplicate/reorder materializer | implemented | `fault_materialization` and property model |
+| Eligibility-aware convergence oracle | implemented | `verdict_matrix` |
+| Explicit replay request/outcome/expiry model | planned | not represented by `origin: replay` |
+| Deterministic 1-minimal witness reducer | planned | no witness claim yet |
+| Stable report/analyze CLI | planned | current CLI exposes `contract` only |
+| Version-pinned production adapter | planned | compatibility matrix lists none |
+
+The detailed product boundary lives in the
+[project charter](docs/charter.md), and supported integrations will appear only
+in the [compatibility matrix](docs/compatibility.md).
+
+## Threat boundary
 
 - Inputs are untrusted and resource-bounded before semantic processing.
-- Cache hashes remain opaque and preserve their wire type; an integer and byte
-  string are never silently conflated.
-- Sequence and epoch are scoped to one publisher stream, never globally.
 - Raw token IDs are omitted or keyed-digested by default. An unkeyed digest is
-  labeled as linkable pseudonymization, not confidentiality.
-- The core has no network listener, dynamic plugin loading, or engine import.
-- The current oracle never turns incomplete evidence into divergence: an
-  inexact side or frontier mismatch is `Ineligible`.
+  described as linkable pseudonymization, not confidentiality.
+- Unknown core fields fail closed.
+- The core has no network listener, dynamic plugin loading, engine import, or
+  automatic production repair path.
+- Evidence errors do not echo trace-controlled identities or token material.
 
-See [the semantics](spec/semantics.md) and [threat model](docs/threat-model.md)
-for the rules behind those constraints.
+See [the threat model](docs/threat-model.md) for attacker capabilities,
+resource ceilings, privacy assumptions, and deliberate non-goals.
 
-## Why this exists now
+## Motivation and upstream context
 
-The design follows documented behavior rather than treating cache events as a
-generic message queue:
+KVCrucible models documented cache-event behavior rather than treating events
+as a generic message queue:
 
-- [vLLM's KV-event subscriber example](https://docs.vllm.ai/en/stable/examples/features/kv_events/)
-  exposes stored, removed, and cleared prefix-cache events.
-- [vLLM's KV-event configuration](https://docs.vllm.ai/en/v0.23.0/api/vllm/config/kv_events/)
-  documents a bounded replay buffer and publisher queue behavior.
-- [NVIDIA Dynamo's router design](https://docs.dynamo.nvidia.com/dynamo/dev/design-docs/component-design/router-design)
-  maintains a distributed prefix view for cache-aware routing.
-- [Dynamo's replay comparison](https://docs.nvidia.com/dynamo/v1.0.2/components/router/kv-event-replay-dynamo-vs-v-llm)
-  makes the recovery differences between Dynamo and vLLM explicit.
+- [vLLM KV-event subscriber example](https://docs.vllm.ai/en/stable/examples/features/kv_events/)
+- [vLLM KV-event configuration](https://docs.vllm.ai/en/v0.23.0/api/vllm/config/kv_events/)
+- [NVIDIA Dynamo router design](https://docs.dynamo.nvidia.com/dynamo/dev/design-docs/component-design/router-design)
+- [Dynamo replay comparison](https://docs.nvidia.com/dynamo/v1.0.2/components/router/kv-event-replay-dynamo-vs-v-llm)
 
-These sources motivate the model; they do not imply endorsement or
-compatibility. Supported versions will appear only in the
-[compatibility matrix](docs/compatibility.md).
+These references motivate the model. They do not imply endorsement,
+compatibility, or formal verification.
 
 ## License
 

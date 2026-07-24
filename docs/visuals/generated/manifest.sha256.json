@@ -1,6 +1,14 @@
 {
   "inputs": [
     {
+      "path": ".cargo/config.toml",
+      "sha256": "665cf9f921217e99f022bfa6849bce4462a1db8a6a21101d75bdde914eb375de"
+    },
+    {
+      "path": ".github/workflows/ci.yml",
+      "sha256": "91c77872326405da71955b7c3e5390087f504e097a75529e7c123b1a9162c458"
+    },
+    {
       "path": "Cargo.lock",
       "sha256": "d56b404ef61ebcf19110441094b529669181cede4822a58614d337cdf473afd5"
     },
@@ -9,8 +17,20 @@
       "sha256": "58fcdef00daf7f58215e90677be9ca688023ef8481e79bde8f9811b6ef458ccd"
     },
     {
-      "path": "rust-toolchain.toml",
-      "sha256": "dbac09f5d391c5243027b6cbcb9e5a762c12a0a7439337212cea71ed1e78616e"
+      "path": "README.md",
+      "sha256": "66c82b32d4fa88b2bfb66da5c950bcedda1c9ed8bdaa558b2508e66ab28e687c"
+    },
+    {
+      "path": "docs/charter.md",
+      "sha256": "0b9138217f6b31e712f4ef0330faf4c6881d4034f94f88080ad1bc516cc2b698"
+    },
+    {
+      "path": "docs/compatibility.md",
+      "sha256": "641668a77c79553e101695bc3a0af99ee6723129bb0bfafbf2e55f5eb045dd6a"
+    },
+    {
+      "path": "docs/threat-model.md",
+      "sha256": "e1361ffe9444ffe38ce2f91ac7ad07f2a56cb87d2469f864e115115f448c4578"
     },
     {
       "path": "examples/delivered_fold.rs",
@@ -25,8 +45,36 @@
       "sha256": "1ee9784aecb937fe93f956beaa83b7f93617c8858a9cf8387d1a7c09ef86010a"
     },
     {
+      "path": "rust-toolchain.toml",
+      "sha256": "dbac09f5d391c5243027b6cbcb9e5a762c12a0a7439337212cea71ed1e78616e"
+    },
+    {
+      "path": "spec/ir-v1.md",
+      "sha256": "7485adf9da2d7cdfa9ec662311a10f07ec314f4ecc612216a9030ec942d785dd"
+    },
+    {
+      "path": "spec/semantics.md",
+      "sha256": "322eaad4102da57adc0e7a3993e8ebb63691aabf35b910cf81c221e00a2d7f3c"
+    },
+    {
+      "path": "src/codec.rs",
+      "sha256": "e730f914c6ba21b437953dfa7207c0167187c6edd41573ad99cbd98a93c91bc7"
+    },
+    {
+      "path": "src/fingerprint.rs",
+      "sha256": "d61db3ca8c153bff6e5a73507d04238f08ce8da91436948f2fa33ff2bd639f55"
+    },
+    {
+      "path": "src/ir.rs",
+      "sha256": "c58155c7816f3ac6767b62dc6ec3e19df32929a31015c45d562a9c34a1037776"
+    },
+    {
       "path": "src/jsonl.rs",
       "sha256": "74a6fb55be3524544f3a45fd5e413ac87f543fc48185e9d5e3a64a39e4a0e176"
+    },
+    {
+      "path": "src/lib.rs",
+      "sha256": "9d44658e909a1fa11271c96f0f87a1a6da05a59d558df6eee659b6577be3fb21"
     },
     {
       "path": "src/limits.rs",
@@ -45,22 +93,50 @@
       "sha256": "8b6f6e275101fc713ff7b63f4fa21213204995a4138a761aabe27cca7b1bfd57"
     },
     {
+      "path": "src/state/tests.rs",
+      "sha256": "750e28bfd2e934544fac2af33146749bfd818ff65d1088b6a9e094c72da516f1"
+    },
+    {
       "path": "src/trace.rs",
       "sha256": "a085efec49d20c204b896464dc7e661313590bc5ed2c1925c5fca3e557ca7bb6"
     },
     {
+      "path": "tests/contract_cli.rs",
+      "sha256": "3befbe9b37a7699dec043f66a240bf56e6bdd4da2953943dcc23dfccbb8663c6"
+    },
+    {
+      "path": "tests/fixtures/codec/envelope.canonical.jsonl",
+      "sha256": "c2b274cfe34c0260ebf76f5a2017b50cc9b3441cbb173d34e9c2bb042a7c485a"
+    },
+    {
+      "path": "tests/fixtures/codec/envelope.noncanonical.jsonl",
+      "sha256": "4aac6454ede485e8b47a8ccc65492176463baf644e9c9b5b7a40b7e1fe41da6a"
+    },
+    {
       "path": "tools/render_readme_visuals.py",
-      "sha256": "4c9bb7c4b32a2632e71c39aa956b6eb131e753391de3e3243eab275efd9d6277"
+      "sha256": "a2f03e2b088973f71f7fcd6aca164248478c714a974ba7a52b6166583550385c"
     }
   ],
   "outputs": [
     {
+      "path": "docs/visuals/generated/architecture.svg",
+      "sha256": "37189c70e5cc56013d4f01f12eedc38a07e370036166d50bfb3676ef24e22950"
+    },
+    {
+      "path": "docs/visuals/generated/certainty-decision.svg",
+      "sha256": "81362b9e88dd3f7cb115d6c3c6e0fc1868786a0fbb8b1bd5fb758055db419f3c"
+    },
+    {
       "path": "docs/visuals/generated/evidence-summary.txt",
-      "sha256": "53add8a7c946d9165403d344b425ccb6b1ede4cbfcc1ebd2ef6100990e92ac9e"
+      "sha256": "d441553f563956d12b60cc982a520dab1f57da74dc46e7f726516a121e141403"
     },
     {
       "path": "docs/visuals/generated/fault-timeline.svg",
       "sha256": "233f353e683e9906d1ca1d2cf5ec9615d417fbc64dcd0a9eeee7886ddb140fca"
+    },
+    {
+      "path": "docs/visuals/generated/setup-workflow.svg",
+      "sha256": "422c3e9458892baa82de55265714165a6c185e691dbd6fc954e9bc39597f85eb"
     },
     {
       "path": "docs/visuals/generated/terminal-evidence.svg",
@@ -68,15 +144,15 @@
     },
     {
       "path": "docs/visuals/generated/terminal-transcript.txt",
-      "sha256": "65f224f8ad4f9222839932d0b2a3da6eb0153ba9a112bbd57a565ab10b53163e"
+      "sha256": "0300f4c6b8af23dabcd04256823090b2e72ccd4a2aa0634ef1e36d5ae12f79e1"
     },
     {
       "path": "docs/visuals/generated/verdict-matrix.svg",
-      "sha256": "8d5f62b7e236a88f669e07123566b6e24c1950e7490f23ada91802238cbbcd7f"
+      "sha256": "48c709ede3d0156df0396edd5dc484818e4391c65347a76c6d25e69397088e1a"
     },
     {
       "path": "docs/visuals/generated/visual-evidence.json",
-      "sha256": "5859ef83c9fea1395474bdf92416d58e61da91b3ba1ef45703c84dd640e3bf47"
+      "sha256": "caaed296bb66a74c56ddf7315cbdd1db7330349008741b187b2493359f3a872a"
     }
   ],
   "schema": "kvcrucible.visual-manifest/v1"

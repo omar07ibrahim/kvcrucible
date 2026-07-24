@@ -12,9 +12,10 @@ import re
 import socket
 import subprocess
 import sys
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Final, Iterable
+from typing import Final, TypedDict, cast
 
 ROOT: Final = Path(__file__).resolve().parents[1]
 OUTPUT_DIRECTORY: Final = ROOT / "docs" / "visuals" / "generated"
@@ -32,25 +33,30 @@ AMBER: Final = "#fbbf24"
 RED: Final = "#fb7185"
 
 SOURCE_PATHS: Final = (
+    ".cargo/config.toml",
+    ".github/workflows/ci.yml",
     "Cargo.lock",
     "Cargo.toml",
+    "README.md",
     "rust-toolchain.toml",
-    "examples/delivered_fold.rs",
-    "examples/fault_materialization.rs",
-    "examples/verdict_matrix.rs",
-    "src/jsonl.rs",
-    "src/limits.rs",
-    "src/main.rs",
-    "src/scenario.rs",
-    "src/state.rs",
-    "src/trace.rs",
     "tools/render_readme_visuals.py",
 )
 
+SOURCE_GLOBS: Final = (
+    "docs/*.md",
+    "examples/**/*.rs",
+    "spec/*.md",
+    "src/**/*.rs",
+    "tests/**/*",
+)
+
 EXPECTED_OUTPUTS: Final = (
+    "architecture.svg",
+    "certainty-decision.svg",
     "evidence-summary.txt",
     "fault-timeline.svg",
     "manifest.sha256.json",
+    "setup-workflow.svg",
     "terminal-evidence.svg",
     "terminal-transcript.txt",
     "verdict-matrix.svg",
@@ -94,6 +100,28 @@ class TestTotals:
     ignored: int
     measured: int
     filtered: int
+
+
+class ExecutionRow(TypedDict):
+    deliveries: int
+    certainty: str
+    frontier: int | None
+    keys: int
+
+
+class IneligibilityRow(TypedDict):
+    pristine_inexact: bool
+    faulted_inexact: bool
+    frontier_mismatch: bool
+
+
+class VerdictRow(TypedDict):
+    fixture: str
+    schedule: str
+    verdict: str
+    pristine: ExecutionRow
+    faulted: ExecutionRow
+    ineligibility: IneligibilityRow
 
 
 def main() -> int:
@@ -143,13 +171,29 @@ def capture_evidence() -> dict[str, Capture]:
                 "--test-threads=1",
             )
         ),
+        "release": run(
+            (
+                "cargo",
+                "build",
+                "--release",
+                "--target",
+                "x86_64-unknown-linux-musl",
+                "--locked",
+            )
+        ),
+        "linkage": run(
+            (
+                "readelf",
+                "--program-headers",
+                "--wide",
+                "target/x86_64-unknown-linux-musl/release/kvcrucible",
+            )
+        ),
         "contract": run(
             ("cargo", "run", "--quiet", "--", "contract", "--format", "json")
         ),
         "fold": run(("cargo", "run", "--quiet", "--example", "delivered_fold")),
-        "fault": run(
-            ("cargo", "run", "--quiet", "--example", "fault_materialization")
-        ),
+        "fault": run(("cargo", "run", "--quiet", "--example", "fault_materialization")),
         "verdicts": run(("cargo", "run", "--quiet", "--example", "verdict_matrix")),
     }
 
@@ -185,10 +229,12 @@ def run(command: tuple[str, ...]) -> Capture:
 
 def build_outputs(captures: dict[str, Capture]) -> dict[str, bytes]:
     contract = json.loads(captures["contract"].stdout)
-    verdicts = json.loads(captures["verdicts"].stdout)
+    raw_verdicts = json.loads(captures["verdicts"].stdout)
     validate_contract(contract)
-    validate_verdicts(verdicts)
+    validate_verdicts(raw_verdicts)
+    verdicts = cast(list[VerdictRow], raw_verdicts)
     tests = parse_test_totals(captures["tests"].stdout)
+    validate_static_linkage(captures["linkage"].stdout)
 
     evidence = {
         "schema": "kvcrucible.visual-evidence/v1",
@@ -204,6 +250,8 @@ def build_outputs(captures: dict[str, Capture]) -> dict[str, bytes]:
         "quality_gate": {
             "format": "pass",
             "clippy": "pass",
+            "static_musl_release": "pass",
+            "dynamic_interpreter": "absent",
             "tests": {
                 "passed": tests.passed,
                 "failed": tests.failed,
@@ -226,6 +274,9 @@ def build_outputs(captures: dict[str, Capture]) -> dict[str, bytes]:
         "terminal-evidence.svg": terminal_svg(captures, tests).encode(),
         "fault-timeline.svg": fault_timeline_svg(captures["fault"].stdout).encode(),
         "verdict-matrix.svg": verdict_matrix_svg(verdicts).encode(),
+        "architecture.svg": architecture_svg().encode(),
+        "certainty-decision.svg": certainty_decision_svg().encode(),
+        "setup-workflow.svg": setup_workflow_svg(captures, tests).encode(),
     }
     outputs["manifest.sha256.json"] = build_manifest(outputs)
     return outputs
@@ -246,7 +297,7 @@ def capture_metadata(
             )
             record["normalized_result"] = normalized
             record["normalized_result_sha256"] = sha256_bytes(normalized.encode())
-        elif name in {"format", "clippy"}:
+        elif name in {"format", "clippy", "release", "linkage"}:
             record["result"] = "pass"
         else:
             record["stdout_sha256"] = capture.stdout_sha256
@@ -256,7 +307,7 @@ def capture_metadata(
 
 def validate_contract(contract: object) -> None:
     if not isinstance(contract, dict):
-        raise ValueError("contract output must be a JSON object")
+        raise TypeError("contract output must be a JSON object")
     required = {
         "project",
         "status",
@@ -300,12 +351,14 @@ def validate_verdicts(verdicts: object) -> None:
     for row, facts in zip(verdicts, expected, strict=True):
         fixture, verdict, pristine, faulted, reasons = facts
         if not isinstance(row, dict):
-            raise ValueError("each verdict row must be a JSON object")
+            raise TypeError("each verdict row must be a JSON object")
         if row.get("fixture") != fixture or row.get("verdict") != verdict:
             raise ValueError(f"unexpected verdict identity for {fixture}")
         assert_execution(row.get("pristine"), pristine, fixture, "pristine")
         assert_execution(row.get("faulted"), faulted, fixture, "faulted")
         ineligibility = row.get("ineligibility")
+        if not isinstance(ineligibility, dict):
+            raise TypeError(f"{fixture} ineligibility evidence must be an object")
         actual_reasons = (
             ineligibility.get("pristine_inexact"),
             ineligibility.get("faulted_inexact"),
@@ -322,7 +375,7 @@ def assert_execution(
     side: str,
 ) -> None:
     if not isinstance(value, dict):
-        raise ValueError(f"{fixture} {side} evidence must be an object")
+        raise TypeError(f"{fixture} {side} evidence must be an object")
     actual = (
         value.get("certainty"),
         value.get("frontier"),
@@ -349,6 +402,11 @@ def parse_test_totals(stdout: str) -> TestTotals:
     return totals
 
 
+def validate_static_linkage(stdout: str) -> None:
+    if re.search(r"^\s*INTERP\s", stdout, re.MULTILINE):
+        raise ValueError("release binary unexpectedly has a dynamic interpreter")
+
+
 def build_transcript(
     captures: dict[str, Capture],
     tests: TestTotals,
@@ -356,10 +414,7 @@ def build_transcript(
     sections = [
         "KVCrucible verified local evidence",
         "fixture-kind: synthetic",
-        (
-            "scope: offline bounded traces; no production engine or GPU is "
-            "exercised"
-        ),
+        ("scope: offline bounded traces; no production engine or GPU is exercised"),
         f"toolchain: {captures['rustc'].stdout.strip()}",
         "",
         f"$ {captures['contract'].command}",
@@ -383,6 +438,10 @@ def build_transcript(
             f"PASS: {tests.passed} passed, {tests.failed} failed, "
             f"{tests.ignored} ignored"
         ),
+        f"$ {captures['release'].command}",
+        "PASS",
+        f"$ {captures['linkage'].command}",
+        "PASS: no INTERP program header",
         "",
     ]
     return "\n".join(sections)
@@ -391,7 +450,7 @@ def build_transcript(
 def build_summary(
     captures: dict[str, Capture],
     contract: dict[str, object],
-    verdicts: list[dict[str, object]],
+    verdicts: list[VerdictRow],
     tests: TestTotals,
 ) -> str:
     lines = [
@@ -401,9 +460,11 @@ def build_summary(
         f"Trace format: {contract['trace_format']}",
         "Fixture kind: synthetic, offline, CPU-only",
         (
-            f"Quality gate: format pass; Clippy pass; {tests.passed} tests pass; "
-            f"{tests.failed} fail"
+            f"Quality gate: format pass; Clippy pass; "
+            f"{counted(tests.passed, 'test')} pass; "
+            f"{counted(tests.failed, 'failure')} observed"
         ),
+        "Release target: x86_64-unknown-linux-musl build pass; no INTERP header",
         "",
         "Observed verdicts:",
     ]
@@ -571,7 +632,7 @@ def fault_timeline_svg(stdout: str) -> str:
     )
 
 
-def verdict_matrix_svg(verdicts: list[dict[str, object]]) -> str:
+def verdict_matrix_svg(verdicts: list[VerdictRow]) -> str:
     colors = {"Converged": GREEN, "Diverged": RED, "Ineligible": AMBER}
     titles = {
         "Converged": "Equivalent exact views",
@@ -661,10 +722,408 @@ def verdict_matrix_svg(verdicts: list[dict[str, object]]) -> str:
     )
 
 
+def architecture_svg() -> str:
+    body = [
+        rect(0, 0, 1440, 1180, BACKGROUND),
+        text(60, 66, "Implemented evidence architecture", 30, TEXT, 700),
+        text(
+            60,
+            101,
+            "One owned trace · bounded work · executable capability only after EOF",
+            16,
+            MUTED,
+        ),
+        pill(1182, 48, 198, "CURRENT BOUNDARY", GREEN),
+        rect(50, 165, 290, 120, PANEL, radius=18, stroke=CYAN),
+        text(78, 204, "UNTRUSTED INPUT", 12, CYAN, 800),
+        text(78, 238, "bounded JSONL decode", 17, TEXT, 700),
+        text(78, 264, "bytes → ValidatedRecord", 13, MUTED),
+        *arrow(340, 225, 390, 225, CYAN),
+        rect(390, 130, 1000, 365, PANEL, radius=22, stroke=LINE),
+        text(425, 170, "TraceAssembler · sticky-failed owner", 18, TEXT, 700),
+        text(
+            425,
+            196,
+            "The same owned records enter both coordinated layers",
+            13,
+            MUTED,
+        ),
+        rect(425, 225, 420, 160, PANEL_ALT, radius=16, stroke=CYAN),
+        text(453, 260, "STRUCTURAL VALIDATOR", 12, CYAN, 800),
+        text(453, 294, "record order + identities", 16, TEXT, 700),
+        text(453, 322, "schedule prefixes + numeric plan", 14, MUTED),
+        text(453, 350, "bounded trace accounting", 14, MUTED),
+        rect(935, 225, 420, 160, PANEL_ALT, radius=16, stroke=PURPLE),
+        text(963, 260, "ENVELOPE NORMALIZER", 12, PURPLE, 800),
+        text(963, 294, "semantic fingerprints", 16, TEXT, 700),
+        text(963, 322, "stream blueprints + sources", 14, MUTED),
+        text(963, 350, "session-wide work budget", 14, MUTED),
+        line(635, 385, 635, 407, LINE, 3),
+        line(1145, 385, 1145, 407, LINE, 3),
+        line(635, 407, 890, 407, LINE, 3),
+        line(1145, 407, 890, 407, LINE, 3),
+        *arrow(890, 407, 890, 423, GREEN),
+        rect(590, 423, 600, 54, "#0b2a26", radius=14, stroke=GREEN),
+        text(
+            890,
+            457,
+            "EOF success  →  SealedTrace capability",
+            16,
+            GREEN,
+            800,
+            anchor="middle",
+        ),
+        text(60, 545, "FRESH PAIRED EXECUTION", 12, MUTED, 800),
+        rect(70, 570, 590, 205, PANEL, radius=20, stroke=CYAN),
+        text(100, 610, "PRISTINE", 13, CYAN, 800),
+        text(100, 646, "physical occurrence-zero order", 17, TEXT, 700),
+        text(100, 679, "fresh per-stream fold states", 14, MUTED),
+        text(100, 708, "exact · recovering · unknown", 14, MUTED),
+        text(100, 741, "no fault action inferred", 13, CYAN, 600),
+        rect(780, 570, 590, 205, PANEL, radius=20, stroke=PURPLE),
+        text(810, 610, "FAULTED", 13, PURPLE, 800),
+        text(810, 646, "indexed schedule materializer", 17, TEXT, 700),
+        text(810, 679, "drop · duplicate · reorder", 14, MUTED),
+        text(810, 708, "shared immutable prepared sources", 14, MUTED),
+        text(810, 741, "fresh per-stream fold states", 13, PURPLE, 600),
+        line(890, 477, 890, 530, LINE, 3),
+        line(365, 530, 1075, 530, LINE, 3),
+        *arrow(365, 530, 365, 570, CYAN),
+        *arrow(1075, 530, 1075, 570, PURPLE),
+        *arrow(365, 775, 600, 835, CYAN),
+        *arrow(1075, 775, 840, 835, PURPLE),
+        rect(390, 835, 660, 100, PANEL_ALT, radius=18, stroke=GREEN),
+        text(720, 872, "ELIGIBILITY GATE", 12, GREEN, 800, anchor="middle"),
+        text(
+            720,
+            904,
+            "both exact + authoritative · same frontier",
+            16,
+            TEXT,
+            700,
+            anchor="middle",
+        ),
+        line(720, 935, 720, 965, GREEN, 3),
+        line(360, 965, 1080, 965, LINE, 3),
+        *arrow(360, 965, 360, 980, GREEN),
+        *arrow(720, 965, 720, 980, RED),
+        *arrow(1080, 965, 1080, 980, AMBER),
+        rect(220, 980, 280, 72, "#0b2a26", radius=16, stroke=GREEN),
+        text(360, 1015, "Converged", 18, GREEN, 800, anchor="middle"),
+        text(360, 1038, "equal view", 12, MUTED, anchor="middle"),
+        rect(580, 980, 280, 72, "#311523", radius=16, stroke=RED),
+        text(720, 1015, "Diverged", 18, RED, 800, anchor="middle"),
+        text(720, 1038, "different view", 12, MUTED, anchor="middle"),
+        rect(940, 980, 280, 72, "#302611", radius=16, stroke=AMBER),
+        text(1080, 1015, "Ineligible", 18, AMBER, 800, anchor="middle"),
+        text(1080, 1038, "insufficient evidence", 12, MUTED, anchor="middle"),
+        dashed_line(50, 1090, 1390, 1090, LINE, 2),
+        text(60, 1120, "PLANNED · OUTSIDE THIS EVIDENCE", 12, MUTED, 800),
+        pill(380, 1102, 180, "REPLAY EVENTS", MUTED),
+        pill(580, 1102, 178, "1-MINIMAL WITNESS", MUTED),
+        pill(778, 1102, 168, "vLLM ADAPTER", MUTED),
+        pill(966, 1102, 180, "REPORT CLI", MUTED),
+    ]
+    return svg_document(
+        "KVCrucible implemented evidence architecture",
+        (
+            "Bounded JSONL validation and normalization seal one executable "
+            "trace, then fresh pristine and faulted folds feed an "
+            "eligibility-aware convergence oracle. Planned layers are separate."
+        ),
+        1440,
+        1180,
+        body,
+    )
+
+
+def certainty_decision_svg() -> str:
+    body = [
+        rect(0, 0, 1440, 920, BACKGROUND),
+        text(60, 66, "How KVCrucible reaches a verdict", 30, TEXT, 700),
+        text(
+            60,
+            101,
+            "Unknown evidence is not silently converted into a cache divergence",
+            16,
+            MUTED,
+        ),
+        pill(1216, 48, 164, "FAIL CLOSED", AMBER),
+        rect(430, 145, 580, 82, PANEL, radius=18, stroke=LINE),
+        text(
+            720,
+            179,
+            "pristine summary + faulted summary",
+            17,
+            TEXT,
+            700,
+            anchor="middle",
+        ),
+        text(
+            720,
+            205,
+            "same visible publisher stream",
+            13,
+            MUTED,
+            anchor="middle",
+        ),
+        *arrow(720, 227, 720, 265, LINE),
+        rect(420, 265, 600, 94, PANEL_ALT, radius=18, stroke=CYAN),
+        text(
+            720,
+            305,
+            "Are both summaries exact + authoritative?",
+            17,
+            TEXT,
+            700,
+            anchor="middle",
+        ),
+        text(
+            720,
+            334,
+            "no active unknown reason or pending evidence",
+            13,
+            MUTED,
+            anchor="middle",
+        ),
+        text(1038, 316, "NO", 12, AMBER, 800),
+        *arrow(1020, 312, 1135, 312, AMBER),
+        rect(1135, 270, 255, 92, "#302611", radius=16, stroke=AMBER),
+        text(1262, 308, "Ineligible", 18, AMBER, 800, anchor="middle"),
+        text(1262, 336, "inexact side flagged", 12, MUTED, anchor="middle"),
+        text(735, 383, "YES", 12, GREEN, 800),
+        *arrow(720, 359, 720, 415, GREEN),
+        rect(420, 415, 600, 82, PANEL_ALT, radius=18, stroke=PURPLE),
+        text(
+            720,
+            465,
+            "Did both sides reach the same frontier?",
+            17,
+            TEXT,
+            700,
+            anchor="middle",
+        ),
+        text(1038, 456, "NO", 12, AMBER, 800),
+        *arrow(1020, 456, 1135, 456, AMBER),
+        rect(1135, 414, 255, 92, "#302611", radius=16, stroke=AMBER),
+        text(1262, 452, "Ineligible", 18, AMBER, 800, anchor="middle"),
+        text(1262, 480, "frontier mismatch", 12, MUTED, anchor="middle"),
+        text(735, 521, "YES", 12, GREEN, 800),
+        *arrow(720, 497, 720, 555, GREEN),
+        rect(420, 555, 600, 82, PANEL_ALT, radius=18, stroke=GREEN),
+        text(
+            720,
+            605,
+            "Are canonical scope + cache membership equal?",
+            17,
+            TEXT,
+            700,
+            anchor="middle",
+        ),
+        text(512, 665, "YES", 12, GREEN, 800),
+        text(914, 665, "NO", 12, RED, 800),
+        *arrow(620, 637, 360, 700, GREEN),
+        *arrow(820, 637, 1080, 700, RED),
+        rect(190, 700, 340, 94, "#0b2a26", radius=18, stroke=GREEN),
+        text(360, 742, "Converged", 21, GREEN, 800, anchor="middle"),
+        text(360, 770, "eligible and equal", 13, MUTED, anchor="middle"),
+        rect(910, 700, 340, 94, "#311523", radius=18, stroke=RED),
+        text(1080, 742, "Diverged", 21, RED, 800, anchor="middle"),
+        text(1080, 770, "eligible but different", 13, MUTED, anchor="middle"),
+        rect(50, 820, 1340, 70, PANEL, radius=14, stroke=LINE),
+        text(
+            720,
+            847,
+            "Every active inexact/frontier flag is retained in the result",
+            13,
+            MUTED,
+            600,
+            anchor="middle",
+        ),
+        text(
+            720,
+            874,
+            "Hard fold/resource errors remain typed errors · they are never verdicts",
+            13,
+            MUTED,
+            600,
+            anchor="middle",
+        ),
+    ]
+    return svg_document(
+        "KVCrucible convergence verdict decision tree",
+        (
+            "Exactness and frontier equality are eligibility preconditions. "
+            "Only eligible cache views can converge or diverge; otherwise the "
+            "result is ineligible."
+        ),
+        1440,
+        920,
+        body,
+    )
+
+
+def setup_workflow_svg(
+    captures: dict[str, Capture],
+    tests: TestTotals,
+) -> str:
+    toolchain = captures["rustc"].stdout.strip().split()[1]
+    body = [
+        rect(0, 0, 1440, 910, BACKGROUND),
+        text(60, 66, "Local reproduction workflow", 30, TEXT, 700),
+        text(
+            60,
+            101,
+            "Evidence run: CPU-only · no model download · no runtime service",
+            16,
+            MUTED,
+        ),
+        pill(1198, 48, 182, "LOCAL EVIDENCE", CYAN),
+        step_card(
+            50,
+            150,
+            650,
+            220,
+            "01",
+            "Inspect the current boundary",
+            (
+                "$ cargo run -- contract",
+                "$ cargo run -- contract --format json",
+            ),
+            CYAN,
+        ),
+        step_card(
+            740,
+            150,
+            650,
+            220,
+            "02",
+            "Execute the delivered fold",
+            ("$ cargo run --example delivered_fold",),
+            PURPLE,
+        ),
+        step_card(
+            50,
+            410,
+            650,
+            220,
+            "03",
+            "Materialize and compare faults",
+            (
+                "$ cargo run --example fault_materialization",
+                "$ cargo run --example verdict_matrix",
+            ),
+            GREEN,
+        ),
+        step_card(
+            740,
+            410,
+            650,
+            220,
+            "04",
+            "Regenerate and verify evidence",
+            (
+                "$ python3 tools/render_readme_visuals.py",
+                "$ python3 tools/render_readme_visuals.py --check",
+            ),
+            AMBER,
+        ),
+        text(60, 686, "FRESHLY EXECUTED GATES", 12, MUTED, 800),
+        quality_card(50, 710, 310, "TOOLCHAIN", f"Rust {toolchain}", CYAN),
+        quality_card(390, 710, 310, "STATIC ANALYSIS", "fmt + Clippy pass", PURPLE),
+        quality_card(
+            730,
+            710,
+            310,
+            "TEST CORPUS",
+            f"{counted(tests.passed, 'test')} · {counted(tests.failed, 'failure')}",
+            GREEN,
+        ),
+        quality_card(
+            1070,
+            710,
+            320,
+            "RELEASE TARGET",
+            "static musl · no INTERP",
+            AMBER,
+        ),
+        text(
+            60,
+            872,
+            (
+                "Every generated asset is deterministic, privacy-checked, and "
+                "bound to source/output SHA-256 digests."
+            ),
+            13,
+            MUTED,
+        ),
+    ]
+    return svg_document(
+        "KVCrucible local reproduction workflow",
+        (
+            "Four local steps inspect the contract, execute folds and fault "
+            "scenarios, then regenerate checked visual evidence. Fresh quality "
+            "gates show the pinned toolchain, tests, and static release target."
+        ),
+        1440,
+        910,
+        body,
+    )
+
+
+def step_card(
+    x: int,
+    y: int,
+    width: int,
+    height: int,
+    number: str,
+    heading: str,
+    commands: tuple[str, ...],
+    accent: str,
+) -> str:
+    fragments = [
+        rect(x, y, width, height, PANEL, radius=20, stroke=LINE),
+        circle(x + 48, y + 47, 25, accent),
+        text(
+            x + 48,
+            y + 53,
+            number,
+            12,
+            BACKGROUND,
+            900,
+            anchor="middle",
+        ),
+        text(x + 88, y + 54, heading, 18, TEXT, 700),
+        rect(x + 30, y + 88, width - 60, 102, PANEL_ALT, radius=12),
+    ]
+    command_y = y + 125
+    for command in commands:
+        fragments.append(text(x + 50, command_y, command, 14, accent, family="mono"))
+        command_y += 36
+    return "".join(fragments)
+
+
+def quality_card(
+    x: int,
+    y: int,
+    width: int,
+    label: str,
+    value: str,
+    accent: str,
+) -> str:
+    return "".join(
+        (
+            rect(x, y, width, 112, PANEL, radius=16, stroke=LINE),
+            text(x + 22, y + 34, label, 11, MUTED, 800),
+            text(x + 22, y + 75, value, 16, accent, 700),
+        )
+    )
+
+
 def metric_panel(
     x: int,
     y: int,
-    execution: dict[str, object],
+    execution: ExecutionRow,
     accent: str,
 ) -> str:
     return "".join(
@@ -674,7 +1133,10 @@ def metric_panel(
             text(
                 x + 18,
                 y + 61,
-                f"frontier {execution['frontier']}  ·  {execution['keys']} keys",
+                (
+                    f"frontier {execution['frontier']}  ·  "
+                    f"{counted(execution['keys'], 'key')}"
+                ),
                 14,
                 TEXT,
                 600,
@@ -682,7 +1144,9 @@ def metric_panel(
             text(
                 x + 18,
                 y + 88,
-                f"{execution['deliveries']} admitted deliveries",
+                (
+                    f"{counted(execution['deliveries'], 'admitted delivery', 'admitted deliveries')}"
+                ),
                 13,
                 MUTED,
             ),
@@ -690,16 +1154,14 @@ def metric_panel(
     )
 
 
-def eligibility_text(reasons: dict[str, object]) -> str:
-    active = [
-        label
-        for key, label in (
-            ("pristine_inexact", "pristine inexact"),
-            ("faulted_inexact", "faulted inexact"),
-            ("frontier_mismatch", "frontier mismatch"),
-        )
-        if reasons[key]
-    ]
+def eligibility_text(reasons: IneligibilityRow) -> str:
+    active = []
+    if reasons["pristine_inexact"]:
+        active.append("pristine inexact")
+    if reasons["faulted_inexact"]:
+        active.append("faulted inexact")
+    if reasons["frontier_mismatch"]:
+        active.append("frontier mismatch")
     return "eligible comparison" if not active else " · ".join(active)
 
 
@@ -751,7 +1213,7 @@ def build_manifest(outputs: dict[str, bytes]) -> bytes:
         "schema": "kvcrucible.visual-manifest/v1",
         "inputs": [
             {"path": path, "sha256": sha256_file(ROOT / path)}
-            for path in SOURCE_PATHS
+            for path in manifest_source_paths()
         ],
         "outputs": [
             {"path": f"docs/visuals/generated/{name}", "sha256": sha256_bytes(body)}
@@ -759,6 +1221,17 @@ def build_manifest(outputs: dict[str, bytes]) -> bytes:
         ],
     }
     return encode_json(manifest)
+
+
+def manifest_source_paths() -> tuple[str, ...]:
+    paths = set(SOURCE_PATHS)
+    for pattern in SOURCE_GLOBS:
+        paths.update(
+            path.relative_to(ROOT).as_posix()
+            for path in ROOT.glob(pattern)
+            if path.is_file()
+        )
+    return tuple(sorted(paths))
 
 
 def validate_outputs(outputs: dict[str, bytes]) -> None:
@@ -788,9 +1261,7 @@ def check_outputs(outputs: dict[str, bytes]) -> int:
     if not OUTPUT_DIRECTORY.is_dir():
         print("visual evidence directory is missing", file=sys.stderr)
         return 1
-    existing = {
-        path.name for path in OUTPUT_DIRECTORY.iterdir() if path.is_file()
-    }
+    existing = {path.name for path in OUTPUT_DIRECTORY.iterdir() if path.is_file()}
     expected = set(EXPECTED_OUTPUTS)
     if existing != expected:
         missing = sorted(expected - existing)
@@ -817,9 +1288,7 @@ def check_outputs(outputs: dict[str, bytes]) -> int:
 
 def write_outputs(outputs: dict[str, bytes]) -> None:
     OUTPUT_DIRECTORY.mkdir(parents=True, exist_ok=True)
-    existing = {
-        path.name for path in OUTPUT_DIRECTORY.iterdir() if path.is_file()
-    }
+    existing = {path.name for path in OUTPUT_DIRECTORY.iterdir() if path.is_file()}
     unexpected = existing - set(EXPECTED_OUTPUTS)
     if unexpected:
         raise ValueError(
@@ -857,8 +1326,8 @@ def svg_document(
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" '
         f'height="{height}" viewBox="0 0 {width} {height}" role="img" '
         f'aria-labelledby="{title_id} {description_id}">\n'
-        f"  <title id=\"{title_id}\">{escape(title_value)}</title>\n"
-        f"  <desc id=\"{description_id}\">{escape(description)}</desc>\n"
+        f'  <title id="{title_id}">{escape(title_value)}</title>\n'
+        f'  <desc id="{description_id}">{escape(description)}</desc>\n'
         f"  <g>{''.join(body)}</g>\n"
         "</svg>\n"
     )
@@ -897,6 +1366,49 @@ def line(
         f'<line x1="{x1}" y1="{y1}" x2="{x2}" y2="{y2}" '
         f'stroke="{stroke}" stroke-width="{width}"/>'
     )
+
+
+def dashed_line(
+    x1: int,
+    y1: int,
+    x2: int,
+    y2: int,
+    stroke: str,
+    width: int,
+) -> str:
+    return (
+        f'<line x1="{x1}" y1="{y1}" x2="{x2}" y2="{y2}" '
+        f'stroke="{stroke}" stroke-width="{width}" stroke-dasharray="8 8"/>'
+    )
+
+
+def arrow(
+    x1: int,
+    y1: int,
+    x2: int,
+    y2: int,
+    stroke: str,
+    width: int = 3,
+) -> list[str]:
+    fragments = [line(x1, y1, x2, y2, stroke, width)]
+    delta_x = x2 - x1
+    delta_y = y2 - y1
+    if abs(delta_x) >= abs(delta_y):
+        direction = 1 if delta_x >= 0 else -1
+        points = (
+            (x2, y2),
+            (x2 - 13 * direction, y2 - 7),
+            (x2 - 13 * direction, y2 + 7),
+        )
+    else:
+        direction = 1 if delta_y >= 0 else -1
+        points = (
+            (x2, y2),
+            (x2 - 7, y2 - 13 * direction),
+            (x2 + 7, y2 - 13 * direction),
+        )
+    fragments.append(polygon(points, stroke))
+    return fragments
 
 
 def polygon(points: Iterable[tuple[int, int]], fill: str) -> str:
