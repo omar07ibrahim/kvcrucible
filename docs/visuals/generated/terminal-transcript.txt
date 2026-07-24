@@ -1,0 +1,124 @@
+KVCrucible verified local evidence
+fixture-kind: synthetic
+scope: offline bounded traces; no production engine or GPU is exercised
+toolchain: rustc 1.97.0 (2d8144b78 2026-07-07)
+
+$ cargo run --quiet -- contract --format json
+{
+  "project": "KVCrucible",
+  "status": "fault materialization and eligibility-aware convergence implemented; replay orchestration, reduction, reports, and engine adapter pending",
+  "trace_format": "kvcrucible.trace/v1alpha1",
+  "implemented_capabilities": [
+    "bounded canonical JSONL ingestion and structural validation",
+    "internal session-bounded semantic envelope fingerprints",
+    "publisher-local cursor and epoch accounting",
+    "bounded exact, recovering, and unknown delivered-envelope states",
+    "atomic scoped cache-view projection with modeled gap exhaustion",
+    "coordinated EOF sealing with opaque numeric fault plans",
+    "deterministic bounded drop, duplicate, and reorder materialization",
+    "schedule-prefix pristine/faulted execution with eligibility-aware per-stream convergence"
+  ],
+  "planned_v0_1_capabilities": [
+    "bounded replay request, outcome, response-attribution, and expiry orchestration",
+    "deterministic 1-minimal witnesses for failed checks",
+    "stable reports and one pinned vLLM adapter"
+  ],
+  "non_goals": [
+    "proving a serving engine correct",
+    "inspecting GPU KV tensors",
+    "inferring allocator or reference-count state from cache events",
+    "optimizing scheduling or routing policies",
+    "repairing a production cache automatically"
+  ]
+}
+
+$ cargo run --quiet --example delivered_fold
+Applied
+Buffered
+Applied
+certainty=Exact frontier=Some(2) keys=3
+
+$ cargo run --quiet --example fault_materialization
+e2#0 Buffered
+e0#0 Applied
+e1#0 Applied
+e1#1 Duplicate
+certainty=Exact frontier=Some(2) keys=3
+verdict=Converged pristine_deliveries=3 faulted_deliveries=4
+
+$ cargo run --quiet --example verdict_matrix
+[
+  {
+    "fixture": "synthetic/reorder-and-duplicate",
+    "schedule": "reorder-and-duplicate",
+    "verdict": "Converged",
+    "pristine": {
+      "deliveries": 3,
+      "certainty": "Exact",
+      "frontier": 2,
+      "keys": 3
+    },
+    "faulted": {
+      "deliveries": 4,
+      "certainty": "Exact",
+      "frontier": 2,
+      "keys": 3
+    },
+    "ineligibility": {
+      "pristine_inexact": false,
+      "faulted_inexact": false,
+      "frontier_mismatch": false
+    }
+  },
+  {
+    "fixture": "synthetic/same-cursor-selection",
+    "schedule": "select-second",
+    "verdict": "Diverged",
+    "pristine": {
+      "deliveries": 2,
+      "certainty": "Exact",
+      "frontier": 0,
+      "keys": 1
+    },
+    "faulted": {
+      "deliveries": 1,
+      "certainty": "Exact",
+      "frontier": 0,
+      "keys": 1
+    },
+    "ineligibility": {
+      "pristine_inexact": false,
+      "faulted_inexact": false,
+      "frontier_mismatch": false
+    }
+  },
+  {
+    "fixture": "synthetic/missing-middle-envelope",
+    "schedule": "drop-middle",
+    "verdict": "Ineligible",
+    "pristine": {
+      "deliveries": 3,
+      "certainty": "Exact",
+      "frontier": 2,
+      "keys": 3
+    },
+    "faulted": {
+      "deliveries": 2,
+      "certainty": "Unknown",
+      "frontier": 0,
+      "keys": 1
+    },
+    "ineligibility": {
+      "pristine_inexact": false,
+      "faulted_inexact": true,
+      "frontier_mismatch": true
+    }
+  }
+]
+
+$ cargo fmt --all --check
+PASS
+$ cargo clippy --all-targets --all-features --locked -- -D warnings
+PASS
+$ cargo test --all-targets --all-features --locked -- --test-threads=1
+PASS: 137 passed, 0 failed, 0 ignored

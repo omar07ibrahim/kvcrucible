@@ -108,11 +108,62 @@ fn main() -> Result<(), Box<dyn Error>> {
         )?,
     ];
 
-    assert_eq!(evidence[0].verdict, "Converged");
-    assert_eq!(evidence[1].verdict, "Diverged");
-    assert_eq!(evidence[2].verdict, "Ineligible");
+    assert_converged(&evidence[0]);
+    assert_diverged(&evidence[1]);
+    assert_ineligible(&evidence[2]);
     println!("{}", serde_json::to_string_pretty(&evidence)?);
     Ok(())
+}
+
+fn assert_converged(evidence: &Evidence) {
+    assert_eq!(evidence.fixture, "synthetic/reorder-and-duplicate");
+    assert_eq!(evidence.schedule, "reorder-and-duplicate");
+    assert_eq!(evidence.verdict, "Converged");
+    assert_execution(&evidence.pristine, 3, "Exact", Some(2), 3);
+    assert_execution(&evidence.faulted, 4, "Exact", Some(2), 3);
+    assert_ineligibility(&evidence.ineligibility, false, false, false);
+}
+
+fn assert_diverged(evidence: &Evidence) {
+    assert_eq!(evidence.fixture, "synthetic/same-cursor-selection");
+    assert_eq!(evidence.schedule, "select-second");
+    assert_eq!(evidence.verdict, "Diverged");
+    assert_execution(&evidence.pristine, 2, "Exact", Some(0), 1);
+    assert_execution(&evidence.faulted, 1, "Exact", Some(0), 1);
+    assert_ineligibility(&evidence.ineligibility, false, false, false);
+}
+
+fn assert_ineligible(evidence: &Evidence) {
+    assert_eq!(evidence.fixture, "synthetic/missing-middle-envelope");
+    assert_eq!(evidence.schedule, "drop-middle");
+    assert_eq!(evidence.verdict, "Ineligible");
+    assert_execution(&evidence.pristine, 3, "Exact", Some(2), 3);
+    assert_execution(&evidence.faulted, 2, "Unknown", Some(0), 1);
+    assert_ineligibility(&evidence.ineligibility, false, true, true);
+}
+
+fn assert_execution(
+    evidence: &ExecutionEvidence,
+    deliveries: usize,
+    certainty: &str,
+    frontier: Option<u64>,
+    keys: usize,
+) {
+    assert_eq!(evidence.deliveries, deliveries);
+    assert_eq!(evidence.certainty, certainty);
+    assert_eq!(evidence.frontier, frontier);
+    assert_eq!(evidence.keys, keys);
+}
+
+fn assert_ineligibility(
+    evidence: &IneligibilityEvidence,
+    pristine_inexact: bool,
+    faulted_inexact: bool,
+    frontier_mismatch: bool,
+) {
+    assert_eq!(evidence.pristine_inexact, pristine_inexact);
+    assert_eq!(evidence.faulted_inexact, faulted_inexact);
+    assert_eq!(evidence.frontier_mismatch, frontier_mismatch);
 }
 
 fn run(

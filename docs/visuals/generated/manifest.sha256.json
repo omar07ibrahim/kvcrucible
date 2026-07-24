@@ -1,0 +1,83 @@
+{
+  "inputs": [
+    {
+      "path": "Cargo.lock",
+      "sha256": "d56b404ef61ebcf19110441094b529669181cede4822a58614d337cdf473afd5"
+    },
+    {
+      "path": "Cargo.toml",
+      "sha256": "58fcdef00daf7f58215e90677be9ca688023ef8481e79bde8f9811b6ef458ccd"
+    },
+    {
+      "path": "rust-toolchain.toml",
+      "sha256": "dbac09f5d391c5243027b6cbcb9e5a762c12a0a7439337212cea71ed1e78616e"
+    },
+    {
+      "path": "examples/delivered_fold.rs",
+      "sha256": "2d7bf2dc2da2dd81f3620522e3705693475b22e038abd5fd0416953108dc93aa"
+    },
+    {
+      "path": "examples/fault_materialization.rs",
+      "sha256": "6602c1d7690ee02dcc37e1fbf4ae2e422bb389db2c17bbdf0932ed4c9ab9760f"
+    },
+    {
+      "path": "examples/verdict_matrix.rs",
+      "sha256": "1ee9784aecb937fe93f956beaa83b7f93617c8858a9cf8387d1a7c09ef86010a"
+    },
+    {
+      "path": "src/jsonl.rs",
+      "sha256": "74a6fb55be3524544f3a45fd5e413ac87f543fc48185e9d5e3a64a39e4a0e176"
+    },
+    {
+      "path": "src/limits.rs",
+      "sha256": "0feb9e620ab435b042a2a5b2f97ef86cb35852d3c50fe124ff522dfd4a7d18bb"
+    },
+    {
+      "path": "src/main.rs",
+      "sha256": "d28a1fd4a797ff8de9c7fcd8c7265be2494d35a7c24c9c74a039dff3c9217e1d"
+    },
+    {
+      "path": "src/scenario.rs",
+      "sha256": "93e3bf4b6892796477a8dcae3702844f8ab4ba0220a980460a5319ff0d6a4914"
+    },
+    {
+      "path": "src/state.rs",
+      "sha256": "8b6f6e275101fc713ff7b63f4fa21213204995a4138a761aabe27cca7b1bfd57"
+    },
+    {
+      "path": "src/trace.rs",
+      "sha256": "a085efec49d20c204b896464dc7e661313590bc5ed2c1925c5fca3e557ca7bb6"
+    },
+    {
+      "path": "tools/render_readme_visuals.py",
+      "sha256": "4c9bb7c4b32a2632e71c39aa956b6eb131e753391de3e3243eab275efd9d6277"
+    }
+  ],
+  "outputs": [
+    {
+      "path": "docs/visuals/generated/evidence-summary.txt",
+      "sha256": "53add8a7c946d9165403d344b425ccb6b1ede4cbfcc1ebd2ef6100990e92ac9e"
+    },
+    {
+      "path": "docs/visuals/generated/fault-timeline.svg",
+      "sha256": "233f353e683e9906d1ca1d2cf5ec9615d417fbc64dcd0a9eeee7886ddb140fca"
+    },
+    {
+      "path": "docs/visuals/generated/terminal-evidence.svg",
+      "sha256": "4db4c3881b05eb9ad72398b55383f1051ca5275dc2167e1ff43cdaec14fc874c"
+    },
+    {
+      "path": "docs/visuals/generated/terminal-transcript.txt",
+      "sha256": "65f224f8ad4f9222839932d0b2a3da6eb0153ba9a112bbd57a565ab10b53163e"
+    },
+    {
+      "path": "docs/visuals/generated/verdict-matrix.svg",
+      "sha256": "8d5f62b7e236a88f669e07123566b6e24c1950e7490f23ada91802238cbbcd7f"
+    },
+    {
+      "path": "docs/visuals/generated/visual-evidence.json",
+      "sha256": "5859ef83c9fea1395474bdf92416d58e61da91b3ba1ef45703c84dd640e3bf47"
+    }
+  ],
+  "schema": "kvcrucible.visual-manifest/v1"
+}

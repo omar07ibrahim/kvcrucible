@@ -1,0 +1,155 @@
+{
+  "captures": {
+    "cargo": {
+      "command": "cargo --version",
+      "stdout_sha256": "f4f564f8936fa8eb53bca8bbe50666489252bbcbeaae0cb0dd54682444697e52"
+    },
+    "clippy": {
+      "command": "cargo clippy --all-targets --all-features --locked -- -D warnings",
+      "result": "pass"
+    },
+    "contract": {
+      "command": "cargo run --quiet -- contract --format json",
+      "stdout_sha256": "857e192b9c85183070aa03b96b2abf8e319118b9cb1bbc94db025561753f86b4"
+    },
+    "fault": {
+      "command": "cargo run --quiet --example fault_materialization",
+      "stdout_sha256": "34ded01259bb7e39d580bfce7f97a4542f2d4fd6ec90fd13ebc15835f51d968a"
+    },
+    "fold": {
+      "command": "cargo run --quiet --example delivered_fold",
+      "stdout_sha256": "bbefdabb92f34409979e629c74d2ff5cd4b48f35eb4f2196259f27ee4db1699c"
+    },
+    "format": {
+      "command": "cargo fmt --all --check",
+      "result": "pass"
+    },
+    "rustc": {
+      "command": "rustc --version",
+      "stdout_sha256": "ac31499b5910ed7ddbf1a62e57e03c1d0ca49fa78efc075b291afa8d192a4d44"
+    },
+    "tests": {
+      "command": "cargo test --all-targets --all-features --locked -- --test-threads=1",
+      "normalized_result": "passed=137;failed=0;ignored=0;measured=0;filtered=0",
+      "normalized_result_sha256": "5a45a9a5073ad99159ebabed8983ffa65149eea38b52e312f3608db391266083"
+    },
+    "verdicts": {
+      "command": "cargo run --quiet --example verdict_matrix",
+      "stdout_sha256": "33e0b4ee52935dd4856524a3a0d137b17ff2a59381a417781f3b82298b49d4bd"
+    }
+  },
+  "contract": {
+    "implemented_capabilities": [
+      "bounded canonical JSONL ingestion and structural validation",
+      "internal session-bounded semantic envelope fingerprints",
+      "publisher-local cursor and epoch accounting",
+      "bounded exact, recovering, and unknown delivered-envelope states",
+      "atomic scoped cache-view projection with modeled gap exhaustion",
+      "coordinated EOF sealing with opaque numeric fault plans",
+      "deterministic bounded drop, duplicate, and reorder materialization",
+      "schedule-prefix pristine/faulted execution with eligibility-aware per-stream convergence"
+    ],
+    "non_goals": [
+      "proving a serving engine correct",
+      "inspecting GPU KV tensors",
+      "inferring allocator or reference-count state from cache events",
+      "optimizing scheduling or routing policies",
+      "repairing a production cache automatically"
+    ],
+    "planned_v0_1_capabilities": [
+      "bounded replay request, outcome, response-attribution, and expiry orchestration",
+      "deterministic 1-minimal witnesses for failed checks",
+      "stable reports and one pinned vLLM adapter"
+    ],
+    "project": "KVCrucible",
+    "status": "fault materialization and eligibility-aware convergence implemented; replay orchestration, reduction, reports, and engine adapter pending",
+    "trace_format": "kvcrucible.trace/v1alpha1"
+  },
+  "provenance": {
+    "cargo": "cargo 1.97.0 (c980f4866 2026-06-30)",
+    "fixture_kind": "synthetic",
+    "fixture_scope": "offline bounded traces; no production engine or GPU is exercised",
+    "rustc": "rustc 1.97.0 (2d8144b78 2026-07-07)",
+    "trace_format": "kvcrucible.trace/v1alpha1"
+  },
+  "quality_gate": {
+    "clippy": "pass",
+    "format": "pass",
+    "tests": {
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "measured": 0,
+      "passed": 137
+    }
+  },
+  "schema": "kvcrucible.visual-evidence/v1",
+  "verdicts": [
+    {
+      "faulted": {
+        "certainty": "Exact",
+        "deliveries": 4,
+        "frontier": 2,
+        "keys": 3
+      },
+      "fixture": "synthetic/reorder-and-duplicate",
+      "ineligibility": {
+        "faulted_inexact": false,
+        "frontier_mismatch": false,
+        "pristine_inexact": false
+      },
+      "pristine": {
+        "certainty": "Exact",
+        "deliveries": 3,
+        "frontier": 2,
+        "keys": 3
+      },
+      "schedule": "reorder-and-duplicate",
+      "verdict": "Converged"
+    },
+    {
+      "faulted": {
+        "certainty": "Exact",
+        "deliveries": 1,
+        "frontier": 0,
+        "keys": 1
+      },
+      "fixture": "synthetic/same-cursor-selection",
+      "ineligibility": {
+        "faulted_inexact": false,
+        "frontier_mismatch": false,
+        "pristine_inexact": false
+      },
+      "pristine": {
+        "certainty": "Exact",
+        "deliveries": 2,
+        "frontier": 0,
+        "keys": 1
+      },
+      "schedule": "select-second",
+      "verdict": "Diverged"
+    },
+    {
+      "faulted": {
+        "certainty": "Unknown",
+        "deliveries": 2,
+        "frontier": 0,
+        "keys": 1
+      },
+      "fixture": "synthetic/missing-middle-envelope",
+      "ineligibility": {
+        "faulted_inexact": true,
+        "frontier_mismatch": true,
+        "pristine_inexact": false
+      },
+      "pristine": {
+        "certainty": "Exact",
+        "deliveries": 3,
+        "frontier": 2,
+        "keys": 3
+      },
+      "schedule": "drop-middle",
+      "verdict": "Ineligible"
+    }
+  ]
+}
