@@ -91,9 +91,21 @@ python3 tools/render_readme_visuals.py --check
 ```
 
 The generator executes the examples and quality gates before rebuilding the
-assets. It rejects unexpected output files, host-specific paths, common
-credential patterns, emails, and terminal escapes. Its manifest binds the
-relevant sources and every non-manifest generated output by SHA-256.
+assets. Fixed commands run with bounded time and output. Their environment is
+allowlisted, but deliberately not hermetic: caller-provided `PATH`,
+`CARGO_HOME`, and `RUSTUP_HOME` remain the trusted toolchain-discovery
+boundary. Secure evidence-file handling is Linux/POSIX-only; it opens every
+repository component with `dirfd` plus `O_NOFOLLOW`, requires regular
+non-symlink files, bounds reads, and atomically replaces each generated file
+through one pinned destination-directory descriptor. The bundle is
+deliberately not transactional and is not rolled back: the manifest is
+published last, so an interrupted bundle leaves an old or stale manifest that
+the next `--check` rejects. The generator also rejects unexpected output files,
+host-specific paths, common credential patterns, emails, and terminal escapes.
+Its manifest binds the relevant sources and every non-manifest generated output
+by SHA-256.
+The executable failure boundaries are covered by
+`python3 -m unittest discover -s tests -p 'test_*.py' -v`.
 
 ## Watch a fault schedule execute
 

@@ -40,6 +40,9 @@ jobs:
           cargo test --target x86_64-unknown-linux-musl
           --all-targets --all-features --locked
 
+      - name: Test visual evidence renderer boundaries
+        run: python3 -m unittest discover -s tests -p 'test_*.py' -v
+
       - name: Build static release CLI
         run: cargo build --release --target x86_64-unknown-linux-musl --locked
 

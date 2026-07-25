@@ -1,4 +1,6 @@
 /target/
+__pycache__/
+*.py[cod]
 *.profraw
 *.profdata
 .DS_Store

@@ -6,7 +6,7 @@
     },
     {
       "path": ".github/workflows/ci.yml",
-      "sha256": "66fed3568b827fceddd5737b3904f08157ff09f2cdb70b94212eaf3dde0b25c3"
+      "sha256": "1dc2fc0a80acf5801a0dec682901a58d76e72984e34631959634eec20fa92af8"
     },
     {
       "path": "Cargo.lock",
@@ -18,7 +18,7 @@
     },
     {
       "path": "README.md",
-      "sha256": "66c82b32d4fa88b2bfb66da5c950bcedda1c9ed8bdaa558b2508e66ab28e687c"
+      "sha256": "59af823ba3852d42bd56e6cfcf1db6b54f7ec8d7189fe5d2f6ca33bb4dcf9a44"
     },
     {
       "path": "docs/charter.md",
@@ -113,8 +113,12 @@
       "sha256": "4aac6454ede485e8b47a8ccc65492176463baf644e9c9b5b7a40b7e1fe41da6a"
     },
     {
+      "path": "tests/test_render_readme_visuals.py",
+      "sha256": "77c92092769191c3ce87988f5ccd0888ce3e7764b238687ace984abb3861f2a0"
+    },
+    {
       "path": "tools/render_readme_visuals.py",
-      "sha256": "a2f03e2b088973f71f7fcd6aca164248478c714a974ba7a52b6166583550385c"
+      "sha256": "1ca45cbd48274f4b8ee3b21a1eb689a700640e0ad9c9d2a6c0a505341f066fba"
     }
   ],
   "outputs": [
