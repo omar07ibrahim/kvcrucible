@@ -4,12 +4,12 @@ Toolchain: rustc 1.97.0 (2d8144b78 2026-07-07)
 Trace format: kvcrucible.trace/v1alpha1
 Fixture kind: synthetic, offline, CPU-only
 Quality gate: format pass; Clippy pass; 137 tests pass; 0 failures observed
-Release target: x86_64-unknown-linux-musl build pass; no INTERP header
+Release target: x86_64-unknown-linux-musl build pass; no INTERP header or DT_NEEDED entry
 
 Observed verdicts:
-- synthetic/reorder-and-duplicate: Converged; pristine=Exact@2 (3 keys/3 deliveries); faulted=Exact@2 (3 keys/4 deliveries)
-- synthetic/same-cursor-selection: Diverged; pristine=Exact@0 (1 key/2 deliveries); faulted=Exact@0 (1 key/1 delivery)
-- synthetic/missing-middle-envelope: Ineligible; pristine=Exact@2 (3 keys/3 deliveries); faulted=Unknown@0 (1 key/2 deliveries)
+- synthetic/reorder-and-duplicate: Converged; pristine=Exact@2 (3 keys/3 processed deliveries); faulted=Exact@2 (3 keys/4 processed deliveries); fingerprint-window=4096; stale-unverifiable=0/0
+- synthetic/same-cursor-selection: Diverged; pristine=Exact@0 (1 key/2 processed deliveries); faulted=Exact@0 (1 key/1 processed delivery); fingerprint-window=0; stale-unverifiable=1/0
+- synthetic/missing-middle-envelope: Ineligible; pristine=Exact@2 (3 keys/3 processed deliveries); faulted=Unknown@0 (1 key/2 processed deliveries); fingerprint-window=4096; stale-unverifiable=0/0
 
 Boundary:
 - Evidence covers the implemented bounded trace, fault materialization, fold, and eligibility-aware oracle.

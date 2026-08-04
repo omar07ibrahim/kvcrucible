@@ -100,7 +100,7 @@ class ContractValidationTests(unittest.TestCase):
             "contract field 'implemented_capabilities' does not match "
             "the reviewed evidence contract",
         ):
-            RENDERER.build_outputs(captures)
+            RENDERER.build_outputs(captures, ())
 
     def test_verdict_schedule_tampering_is_rejected(self) -> None:
         verdicts = reviewed_verdicts()
@@ -133,6 +133,165 @@ class ContractValidationTests(unittest.TestCase):
             "pristine evidence has an unexpected field set",
         ):
             RENDERER.validate_verdicts(verdicts)
+
+    def test_verdict_runtime_window_tampering_is_rejected(self) -> None:
+        verdicts = reviewed_verdicts()
+        pristine = verdicts[1]["pristine"]
+        assert isinstance(pristine, dict)
+        pristine["fingerprint_window"] = 4_096
+
+        with self.assertRaisesRegex(
+            RENDERER.EvidenceError,
+            "unexpected pristine execution evidence",
+        ):
+            RENDERER.validate_verdicts(verdicts)
+
+    def test_verdict_stale_diagnostic_tampering_is_rejected(self) -> None:
+        verdicts = reviewed_verdicts()
+        pristine = verdicts[1]["pristine"]
+        assert isinstance(pristine, dict)
+        pristine["stale_unverifiable"] = 0
+
+        with self.assertRaisesRegex(
+            RENDERER.EvidenceError,
+            "unexpected pristine execution evidence",
+        ):
+            RENDERER.validate_verdicts(verdicts)
+
+    def test_reviewed_transcript_discloses_normalization(self) -> None:
+        generated = REPOSITORY_ROOT / "docs" / "visuals" / "generated"
+        transcript = (generated / "terminal-transcript.txt").read_text()
+        terminal_svg = (generated / "terminal-evidence.svg").read_text()
+
+        self.assertIn("exact contract/example stdout", transcript)
+        self.assertIn("normalized quality-gate outcomes", transcript)
+        self.assertIn("successful stderr omitted", transcript)
+        self.assertIn(">VERIFIED<", terminal_svg)
+        self.assertIn("normalized local quality-gate outcomes", terminal_svg)
+
+    def test_static_linkage_rejects_dynamic_dependencies(self) -> None:
+        with self.assertRaisesRegex(ValueError, "dynamic dependency"):
+            RENDERER.validate_static_linkage(
+                " 0x0000000000000001 (NEEDED) Shared library: [libc.so.6]"
+            )
+
+
+class EvidenceSnapshotTests(unittest.TestCase):
+    SNAPSHOT = (("README.md", "a" * 64),)
+    CHANGED = (("README.md", "b" * 64),)
+
+    def invoke_main(self) -> tuple[int, str]:
+        standard_error = io.StringIO()
+        with redirect_stderr(standard_error):
+            status = RENDERER.main()
+        return status, standard_error.getvalue()
+
+    def test_source_change_during_capture_stops_before_rendering(self) -> None:
+        with (
+            mock.patch.object(sys, "argv", ["renderer"]),
+            mock.patch.object(
+                RENDERER,
+                "capture_manifest_source_snapshot",
+                side_effect=[self.SNAPSHOT, self.CHANGED],
+            ),
+            mock.patch.object(RENDERER, "capture_evidence", return_value={}),
+            mock.patch.object(RENDERER, "build_outputs") as build_outputs,
+        ):
+            status, standard_error = self.invoke_main()
+
+        self.assertEqual(status, 2)
+        self.assertIn(
+            "manifest inputs changed during evidence capture",
+            standard_error,
+        )
+        build_outputs.assert_not_called()
+
+    def test_source_change_before_publication_stops_before_write(self) -> None:
+        outputs = {"artifact.txt": b"artifact"}
+        with (
+            mock.patch.object(sys, "argv", ["renderer"]),
+            mock.patch.object(
+                RENDERER,
+                "capture_manifest_source_snapshot",
+                side_effect=[self.SNAPSHOT, self.SNAPSHOT, self.CHANGED],
+            ),
+            mock.patch.object(RENDERER, "capture_evidence", return_value={}),
+            mock.patch.object(
+                RENDERER,
+                "build_outputs",
+                return_value=outputs,
+            ),
+            mock.patch.object(RENDERER, "validate_outputs"),
+            mock.patch.object(RENDERER, "write_outputs") as write_outputs,
+        ):
+            status, standard_error = self.invoke_main()
+
+        self.assertEqual(status, 2)
+        self.assertIn(
+            "manifest inputs changed before evidence publication",
+            standard_error,
+        )
+        write_outputs.assert_not_called()
+
+    def test_source_change_after_write_cannot_report_success(self) -> None:
+        outputs = {"artifact.txt": b"artifact"}
+        with (
+            mock.patch.object(sys, "argv", ["renderer"]),
+            mock.patch.object(
+                RENDERER,
+                "capture_manifest_source_snapshot",
+                side_effect=[
+                    self.SNAPSHOT,
+                    self.SNAPSHOT,
+                    self.SNAPSHOT,
+                    self.CHANGED,
+                ],
+            ),
+            mock.patch.object(RENDERER, "capture_evidence", return_value={}),
+            mock.patch.object(
+                RENDERER,
+                "build_outputs",
+                return_value=outputs,
+            ),
+            mock.patch.object(RENDERER, "validate_outputs"),
+            mock.patch.object(RENDERER, "write_outputs") as write_outputs,
+        ):
+            status, standard_error = self.invoke_main()
+
+        self.assertEqual(status, 2)
+        self.assertIn(
+            "manifest inputs changed during evidence publication",
+            standard_error,
+        )
+        write_outputs.assert_called_once_with(
+            outputs,
+            source_snapshot=self.SNAPSHOT,
+        )
+
+    def test_manifest_serializes_the_captured_snapshot_without_rereading(self) -> None:
+        with (
+            mock.patch.object(
+                RENDERER,
+                "manifest_source_paths",
+                side_effect=AssertionError("late source discovery"),
+            ),
+            mock.patch.object(
+                RENDERER,
+                "sha256_file",
+                side_effect=AssertionError("late source read"),
+            ),
+        ):
+            manifest = json.loads(
+                RENDERER.build_manifest(
+                    {"artifact.txt": b"artifact"},
+                    self.SNAPSHOT,
+                )
+            )
+
+        self.assertEqual(
+            manifest["inputs"],
+            [{"path": "README.md", "sha256": "a" * 64}],
+        )
 
 
 class ProcessBoundaryTests(unittest.TestCase):
@@ -781,6 +940,7 @@ class FileBoundaryTests(unittest.TestCase):
                 RENDERER.atomic_write(target, b"after")
 
             self.assertEqual(target.read_bytes(), b"after")
+            self.assertEqual(target.stat().st_mode & 0o777, 0o644)
             self.assertEqual(len(replacements), 1)
             source, destination, source_fd, destination_fd = replacements[0]
             self.assertNotIn("/", source)
@@ -789,6 +949,43 @@ class FileBoundaryTests(unittest.TestCase):
             self.assertEqual(
                 [path.name for path in directory.iterdir()],
                 ["artifact.txt"],
+            )
+
+    def test_write_outputs_repairs_an_identical_non_portable_mode(self) -> None:
+        with self.temporary_directory() as directory_name:
+            directory = Path(directory_name)
+            target = directory / "artifact.txt"
+            target.write_bytes(b"reviewed")
+            target.chmod(0o600)
+
+            RENDERER.write_outputs(
+                {"artifact.txt": b"reviewed"},
+                output_directory=directory,
+                expected_outputs=("artifact.txt",),
+            )
+
+            self.assertEqual(target.read_bytes(), b"reviewed")
+            self.assertEqual(target.stat().st_mode & 0o777, 0o644)
+
+    def test_check_outputs_rejects_a_non_portable_mode(self) -> None:
+        with self.temporary_directory() as directory_name:
+            directory = Path(directory_name)
+            target = directory / "artifact.txt"
+            target.write_bytes(b"reviewed")
+            target.chmod(0o600)
+            standard_error = io.StringIO()
+
+            with redirect_stderr(standard_error):
+                status = RENDERER.check_outputs(
+                    {"artifact.txt": b"reviewed"},
+                    output_directory=directory,
+                    expected_outputs=("artifact.txt",),
+                )
+
+            self.assertEqual(status, 1)
+            self.assertIn(
+                "generated files with non-portable modes: artifact.txt",
+                standard_error.getvalue(),
             )
 
     def test_atomic_write_failure_preserves_target_and_cleans_staging(self) -> None:
@@ -978,6 +1175,40 @@ class FileBoundaryTests(unittest.TestCase):
                 published,
                 ["artifact.txt", "manifest.sha256.json"],
             )
+
+    def test_source_change_during_write_preserves_the_old_manifest(self) -> None:
+        with self.temporary_directory() as directory_name:
+            directory = Path(directory_name)
+            artifact = directory / "artifact.txt"
+            artifact.write_bytes(b"old-artifact")
+            manifest = directory / "manifest.sha256.json"
+            manifest.write_bytes(b"old-manifest")
+            snapshot = (("README.md", "a" * 64),)
+
+            with mock.patch.object(
+                RENDERER,
+                "capture_manifest_source_snapshot",
+                return_value=(("README.md", "b" * 64),),
+            ):
+                with self.assertRaisesRegex(
+                    RENDERER.EvidenceError,
+                    "manifest inputs changed during evidence publication",
+                ):
+                    RENDERER.write_outputs(
+                        {
+                            "artifact.txt": b"new-artifact",
+                            "manifest.sha256.json": b"new-manifest",
+                        },
+                        output_directory=directory,
+                        expected_outputs=(
+                            "artifact.txt",
+                            "manifest.sha256.json",
+                        ),
+                        source_snapshot=snapshot,
+                    )
+
+            self.assertEqual(artifact.read_bytes(), b"new-artifact")
+            self.assertEqual(manifest.read_bytes(), b"old-manifest")
 
     def test_mid_bundle_failure_leaves_old_manifest_and_check_fails(
         self,

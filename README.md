@@ -23,12 +23,14 @@ inspecting GPU memory.
 
 [![Verified KVCrucible terminal evidence](docs/visuals/generated/terminal-evidence.svg)](docs/visuals/generated/terminal-evidence.svg)
 
-The terminal visual is generated from fresh executable stdout, not a hand-made
-mockup. The same run produces
+The terminal visual combines exact executable-example stdout with normalized
+quality-gate outcomes; it is not a hand-made mockup. The same run produces
 [machine-readable evidence](docs/visuals/generated/visual-evidence.json),
 [a plain summary](docs/visuals/generated/evidence-summary.txt),
-[the complete transcript](docs/visuals/generated/terminal-transcript.txt), and
+[a verified evidence transcript](docs/visuals/generated/terminal-transcript.txt), and
 [a SHA-256 manifest](docs/visuals/generated/manifest.sha256.json).
+The transcript preserves exact contract/example stdout, records normalized gate
+outcomes, and intentionally omits successful stderr.
 
 ## What the current evidence proves
 
@@ -60,6 +62,9 @@ outside the implemented evidence.
 The repository pins Rust 1.97.0, including `rustfmt`, Clippy, and the
 `x86_64-unknown-linux-musl` target. The examples use synthetic traces and need
 no GPU, model download, paid API, or running service.
+Evidence generation additionally requires Linux/POSIX, Python 3.11 or newer,
+and GNU `readelf` from binutils; the Python renderer uses only the standard
+library.
 
 [![KVCrucible local reproduction workflow](docs/visuals/generated/setup-workflow.svg)](docs/visuals/generated/setup-workflow.svg)
 
@@ -102,8 +107,9 @@ deliberately not transactional and is not rolled back: the manifest is
 published last, so an interrupted bundle leaves an old or stale manifest that
 the next `--check` rejects. The generator also rejects unexpected output files,
 host-specific paths, common credential patterns, emails, and terminal escapes.
-Its manifest binds the relevant sources and every non-manifest generated output
-by SHA-256.
+Its manifest binds a stable pre-capture snapshot of the relevant sources and
+every non-manifest generated output by SHA-256. Source drift after capture or
+during publication is rejected; the manifest remains the last published file.
 The executable failure boundaries are covered by
 `python3 -m unittest discover -s tests -p 'test_*.py' -v`.
 
@@ -135,8 +141,8 @@ history.
 
 ## Exercise every oracle outcome
 
-`verdict_matrix` executes three bounded synthetic traces and emits the complete
-facts as deterministic JSON:
+`verdict_matrix` executes three bounded synthetic traces and emits reviewed,
+decision-relevant runtime facts as deterministic JSON:
 
 ```bash
 cargo run --example verdict_matrix
@@ -149,6 +155,13 @@ cargo run --example verdict_matrix
   differs.
 - **Ineligible:** one side is `Unknown` and the frontiers differ, so available
   evidence cannot justify a convergence claim.
+
+The `Diverged` fixture deliberately overrides the retained fingerprint window
+from its default `4096` to `0`. The pristine run therefore records its second
+cursor-`0` payload as `stale_unverifiable=1`, not as a verified equivocation;
+the faulted run drops the first payload and applies the second. Both views stay
+exact at frontier `0` but contain different keys. The runtime window and stale
+diagnostics are present in the JSON and the generated matrix.
 
 The fixtures are synthetic by design. They test KVCrucible's model and fault
 executor; they are not presented as captures from a production engine.
@@ -234,7 +247,7 @@ as a generic message queue:
 
 - [vLLM KV-event subscriber example](https://docs.vllm.ai/en/stable/examples/features/kv_events/)
 - [vLLM KV-event configuration](https://docs.vllm.ai/en/v0.23.0/api/vllm/config/kv_events/)
-- [NVIDIA Dynamo router design](https://docs.dynamo.nvidia.com/dynamo/dev/design-docs/component-design/router-design)
+- [NVIDIA Dynamo router design](https://docs.nvidia.com/dynamo/dev/knowledge-base/modular-components/router/router-design)
 - [Dynamo replay comparison](https://docs.nvidia.com/dynamo/v1.0.2/components/router/kv-event-replay-dynamo-vs-v-llm)
 
 These references motivate the model. They do not imply endorsement,

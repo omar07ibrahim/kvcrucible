@@ -61,7 +61,8 @@ const INELIGIBLE_TRACE: &[u8] = concat!(
 #[derive(Serialize)]
 struct Evidence {
     fixture: &'static str,
-    schedule: &'static str,
+    schedule: String,
+    stream: String,
     verdict: &'static str,
     pristine: ExecutionEvidence,
     faulted: ExecutionEvidence,
@@ -70,10 +71,12 @@ struct Evidence {
 
 #[derive(Serialize)]
 struct ExecutionEvidence {
-    deliveries: usize,
+    processed_deliveries: usize,
     certainty: &'static str,
     frontier: Option<u64>,
     keys: usize,
+    fingerprint_window: usize,
+    stale_unverifiable: u64,
 }
 
 #[derive(Serialize)]
@@ -118,41 +121,48 @@ fn main() -> Result<(), Box<dyn Error>> {
 fn assert_converged(evidence: &Evidence) {
     assert_eq!(evidence.fixture, "synthetic/reorder-and-duplicate");
     assert_eq!(evidence.schedule, "reorder-and-duplicate");
+    assert_eq!(evidence.stream, "s");
     assert_eq!(evidence.verdict, "Converged");
-    assert_execution(&evidence.pristine, 3, "Exact", Some(2), 3);
-    assert_execution(&evidence.faulted, 4, "Exact", Some(2), 3);
+    assert_execution(&evidence.pristine, 3, "Exact", Some(2), 3, 4_096, 0);
+    assert_execution(&evidence.faulted, 4, "Exact", Some(2), 3, 4_096, 0);
     assert_ineligibility(&evidence.ineligibility, false, false, false);
 }
 
 fn assert_diverged(evidence: &Evidence) {
     assert_eq!(evidence.fixture, "synthetic/same-cursor-selection");
     assert_eq!(evidence.schedule, "select-second");
+    assert_eq!(evidence.stream, "s");
     assert_eq!(evidence.verdict, "Diverged");
-    assert_execution(&evidence.pristine, 2, "Exact", Some(0), 1);
-    assert_execution(&evidence.faulted, 1, "Exact", Some(0), 1);
+    assert_execution(&evidence.pristine, 2, "Exact", Some(0), 1, 0, 1);
+    assert_execution(&evidence.faulted, 1, "Exact", Some(0), 1, 0, 0);
     assert_ineligibility(&evidence.ineligibility, false, false, false);
 }
 
 fn assert_ineligible(evidence: &Evidence) {
     assert_eq!(evidence.fixture, "synthetic/missing-middle-envelope");
     assert_eq!(evidence.schedule, "drop-middle");
+    assert_eq!(evidence.stream, "s");
     assert_eq!(evidence.verdict, "Ineligible");
-    assert_execution(&evidence.pristine, 3, "Exact", Some(2), 3);
-    assert_execution(&evidence.faulted, 2, "Unknown", Some(0), 1);
+    assert_execution(&evidence.pristine, 3, "Exact", Some(2), 3, 4_096, 0);
+    assert_execution(&evidence.faulted, 2, "Unknown", Some(0), 1, 4_096, 0);
     assert_ineligibility(&evidence.ineligibility, false, true, true);
 }
 
 fn assert_execution(
     evidence: &ExecutionEvidence,
-    deliveries: usize,
+    processed_deliveries: usize,
     certainty: &str,
     frontier: Option<u64>,
     keys: usize,
+    fingerprint_window: usize,
+    stale_unverifiable: u64,
 ) {
-    assert_eq!(evidence.deliveries, deliveries);
+    assert_eq!(evidence.processed_deliveries, processed_deliveries);
     assert_eq!(evidence.certainty, certainty);
     assert_eq!(evidence.frontier, frontier);
     assert_eq!(evidence.keys, keys);
+    assert_eq!(evidence.fingerprint_window, fingerprint_window);
+    assert_eq!(evidence.stale_unverifiable, stale_unverifiable);
 }
 
 fn assert_ineligibility(
@@ -183,7 +193,50 @@ fn run(
         assembler.push(record, authority)?;
     }
 
-    let comparison = assembler.finish()?.compare_schedule(0)?;
+    let sealed = assembler.finish()?;
+    assert_eq!(
+        sealed.stream_count(),
+        1,
+        "evidence fixtures have one stream"
+    );
+    assert_eq!(
+        sealed.schedule_count(),
+        1,
+        "evidence fixtures have one schedule"
+    );
+    assert_eq!(
+        sealed.schedule_id(0),
+        Some(schedule),
+        "fixture label must match the parsed schedule"
+    );
+    assert_eq!(sealed.stream_id(0), Some("s"));
+    assert_eq!(sealed.schedule_stream_prefix(0), Some(1));
+    let actual_schedule = sealed
+        .schedule_id(0)
+        .expect("the reviewed schedule exists")
+        .to_owned();
+    let actual_stream = sealed
+        .stream_id(0)
+        .expect("the reviewed stream exists")
+        .to_owned();
+    let source_prefix = sealed
+        .schedule_source_prefix(0)
+        .expect("the reviewed schedule has a source prefix");
+
+    let comparison = sealed.compare_schedule(0)?;
+    assert_eq!(
+        comparison.stream_count(),
+        1,
+        "evidence comparison must expose one stream"
+    );
+    assert_eq!(comparison.pristine().stream_count(), 1);
+    assert_eq!(comparison.faulted().stream_count(), 1);
+    assert_eq!(comparison.pristine().schedule_id(), schedule);
+    assert_eq!(comparison.faulted().schedule_id(), schedule);
+    assert_eq!(comparison.pristine().stream_prefix(), 1);
+    assert_eq!(comparison.faulted().stream_prefix(), 1);
+    assert_eq!(comparison.pristine().source_prefix(), source_prefix);
+    assert_eq!(comparison.faulted().source_prefix(), source_prefix);
     let stream = comparison
         .stream(0)
         .expect("each evidence fixture declares one visible stream");
@@ -199,19 +252,24 @@ fn run(
 
     Ok(Evidence {
         fixture,
-        schedule,
+        schedule: actual_schedule,
+        stream: actual_stream,
         verdict: verdict_name(stream.verdict()),
         pristine: ExecutionEvidence {
-            deliveries: comparison.pristine().delivery_count(),
+            processed_deliveries: comparison.pristine().delivery_count(),
             certainty: certainty_name(pristine.certainty()),
             frontier: pristine.frontier(),
             keys: pristine.cache_view().key_count(),
+            fingerprint_window: pristine.fingerprint_window(),
+            stale_unverifiable: pristine.diagnostics().stale_unverifiable(),
         },
         faulted: ExecutionEvidence {
-            deliveries: comparison.faulted().delivery_count(),
+            processed_deliveries: comparison.faulted().delivery_count(),
             certainty: certainty_name(faulted.certainty()),
             frontier: faulted.frontier(),
             keys: faulted.cache_view().key_count(),
+            fingerprint_window: faulted.fingerprint_window(),
+            stale_unverifiable: faulted.diagnostics().stale_unverifiable(),
         },
         ineligibility: IneligibilityEvidence {
             pristine_inexact: ineligibility.pristine_inexact(),

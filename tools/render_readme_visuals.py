@@ -37,6 +37,7 @@ MAX_MANIFEST_DISCOVERY_ENTRIES: Final = 8_192
 MAX_MANIFEST_DISCOVERY_DEPTH: Final = 128
 MAX_OUTPUT_DIRECTORY_ENTRIES: Final = 64
 READ_CHUNK_BYTES: Final = 64 * 1024
+GENERATED_OUTPUT_MODE: Final = 0o644
 
 PASSTHROUGH_ENVIRONMENT: Final = (
     "PATH",
@@ -182,10 +183,12 @@ class TestTotals:
 
 
 class ExecutionRow(TypedDict):
-    deliveries: int
+    processed_deliveries: int
     certainty: str
     frontier: int | None
     keys: int
+    fingerprint_window: int
+    stale_unverifiable: int
 
 
 class IneligibilityRow(TypedDict):
@@ -197,10 +200,14 @@ class IneligibilityRow(TypedDict):
 class VerdictRow(TypedDict):
     fixture: str
     schedule: str
+    stream: str
     verdict: str
     pristine: ExecutionRow
     faulted: ExecutionRow
     ineligibility: IneligibilityRow
+
+
+ManifestSourceSnapshot = tuple[tuple[str, str], ...]
 
 
 def main() -> int:
@@ -213,14 +220,29 @@ def main() -> int:
     arguments = parser.parse_args()
 
     try:
+        source_snapshot = capture_manifest_source_snapshot()
         captures = capture_evidence()
-        outputs = build_outputs(captures)
+        require_manifest_source_snapshot(
+            source_snapshot,
+            "during evidence capture",
+        )
+        outputs = build_outputs(captures, source_snapshot)
         validate_outputs(outputs)
+        require_manifest_source_snapshot(
+            source_snapshot,
+            "before evidence publication",
+        )
 
         if arguments.check:
-            return check_outputs(outputs)
-        write_outputs(outputs)
-        return 0
+            status = check_outputs(outputs)
+        else:
+            write_outputs(outputs, source_snapshot=source_snapshot)
+            status = 0
+        require_manifest_source_snapshot(
+            source_snapshot,
+            "during evidence publication",
+        )
+        return status
     except (EvidenceError, TypeError, ValueError) as error:
         print(f"evidence error: {error}", file=sys.stderr)
         return 2
@@ -268,6 +290,7 @@ def capture_evidence() -> dict[str, Capture]:
             (
                 "readelf",
                 "--program-headers",
+                "--dynamic",
                 "--wide",
                 "target/x86_64-unknown-linux-musl/release/kvcrucible",
             )
@@ -512,7 +535,10 @@ def stable_diagnostic(value: str) -> str:
     return compact
 
 
-def build_outputs(captures: dict[str, Capture]) -> dict[str, bytes]:
+def build_outputs(
+    captures: dict[str, Capture],
+    source_snapshot: ManifestSourceSnapshot,
+) -> dict[str, bytes]:
     contract = json.loads(captures["contract"].stdout)
     raw_verdicts = json.loads(captures["verdicts"].stdout)
     validate_contract(contract)
@@ -522,7 +548,7 @@ def build_outputs(captures: dict[str, Capture]) -> dict[str, bytes]:
     validate_static_linkage(captures["linkage"].stdout)
 
     evidence = {
-        "schema": "kvcrucible.visual-evidence/v1",
+        "schema": "kvcrucible.visual-evidence/v2",
         "provenance": {
             "fixture_kind": "synthetic",
             "fixture_scope": (
@@ -537,6 +563,7 @@ def build_outputs(captures: dict[str, Capture]) -> dict[str, bytes]:
             "clippy": "pass",
             "static_musl_release": "pass",
             "dynamic_interpreter": "absent",
+            "dynamic_dependencies": "absent",
             "tests": {
                 "passed": tests.passed,
                 "failed": tests.failed,
@@ -563,7 +590,7 @@ def build_outputs(captures: dict[str, Capture]) -> dict[str, bytes]:
         "certainty-decision.svg": certainty_decision_svg().encode(),
         "setup-workflow.svg": setup_workflow_svg(captures, tests).encode(),
     }
-    outputs["manifest.sha256.json"] = build_manifest(outputs)
+    outputs["manifest.sha256.json"] = build_manifest(outputs, source_snapshot)
     return outputs
 
 
@@ -611,24 +638,24 @@ def validate_verdicts(verdicts: object) -> None:
             "synthetic/reorder-and-duplicate",
             "reorder-and-duplicate",
             "Converged",
-            ("Exact", 2, 3, 3),
-            ("Exact", 2, 3, 4),
+            ("Exact", 2, 3, 3, 4_096, 0),
+            ("Exact", 2, 3, 4, 4_096, 0),
             (False, False, False),
         ),
         (
             "synthetic/same-cursor-selection",
             "select-second",
             "Diverged",
-            ("Exact", 0, 1, 2),
-            ("Exact", 0, 1, 1),
+            ("Exact", 0, 1, 2, 0, 1),
+            ("Exact", 0, 1, 1, 0, 0),
             (False, False, False),
         ),
         (
             "synthetic/missing-middle-envelope",
             "drop-middle",
             "Ineligible",
-            ("Exact", 2, 3, 3),
-            ("Unknown", 0, 1, 2),
+            ("Exact", 2, 3, 3, 4_096, 0),
+            ("Unknown", 0, 1, 2, 4_096, 0),
             (False, True, True),
         ),
     )
@@ -639,6 +666,7 @@ def validate_verdicts(verdicts: object) -> None:
         expected_fields = {
             "fixture",
             "schedule",
+            "stream",
             "verdict",
             "pristine",
             "faulted",
@@ -652,6 +680,8 @@ def validate_verdicts(verdicts: object) -> None:
             raise EvidenceError(f"unexpected verdict identity for {fixture}")
         if row["schedule"] != schedule:
             raise EvidenceError(f"unexpected schedule for {fixture}")
+        if row["stream"] != "s":
+            raise EvidenceError(f"unexpected stream for {fixture}")
         assert_execution(row["pristine"], pristine, fixture, "pristine")
         assert_execution(row["faulted"], faulted, fixture, "faulted")
         ineligibility = row["ineligibility"]
@@ -688,13 +718,20 @@ def validate_verdicts(verdicts: object) -> None:
 
 def assert_execution(
     value: object,
-    expected: tuple[str, int, int, int],
+    expected: tuple[str, int, int, int, int, int],
     fixture: str,
     side: str,
 ) -> None:
     if not isinstance(value, dict):
         raise EvidenceError(f"{fixture} {side} evidence must be an object")
-    expected_fields = {"certainty", "frontier", "keys", "deliveries"}
+    expected_fields = {
+        "certainty",
+        "frontier",
+        "keys",
+        "processed_deliveries",
+        "fingerprint_window",
+        "stale_unverifiable",
+    }
     if set(value) != expected_fields:
         raise EvidenceError(
             f"{fixture} {side} evidence has an unexpected field set"
@@ -703,7 +740,9 @@ def assert_execution(
         not isinstance(value["certainty"], str)
         or type(value["frontier"]) is not int
         or type(value["keys"]) is not int
-        or type(value["deliveries"]) is not int
+        or type(value["processed_deliveries"]) is not int
+        or type(value["fingerprint_window"]) is not int
+        or type(value["stale_unverifiable"]) is not int
     ):
         raise EvidenceError(
             f"{fixture} {side} evidence has unexpected value types"
@@ -712,7 +751,9 @@ def assert_execution(
         value["certainty"],
         value["frontier"],
         value["keys"],
-        value["deliveries"],
+        value["processed_deliveries"],
+        value["fingerprint_window"],
+        value["stale_unverifiable"],
     )
     if actual != expected:
         raise EvidenceError(
@@ -739,6 +780,8 @@ def parse_test_totals(stdout: str) -> TestTotals:
 def validate_static_linkage(stdout: str) -> None:
     if re.search(r"^\s*INTERP\s", stdout, re.MULTILINE):
         raise ValueError("release binary unexpectedly has a dynamic interpreter")
+    if re.search(r"\(NEEDED\)", stdout):
+        raise ValueError("release binary unexpectedly has a dynamic dependency")
 
 
 def build_transcript(
@@ -749,6 +792,10 @@ def build_transcript(
         "KVCrucible verified local evidence",
         "fixture-kind: synthetic",
         ("scope: offline bounded traces; no production engine or GPU is exercised"),
+        (
+            "capture-format: exact contract/example stdout; normalized "
+            "quality-gate outcomes; successful stderr omitted"
+        ),
         f"toolchain: {captures['rustc'].stdout.strip()}",
         "",
         f"$ {captures['contract'].command}",
@@ -775,7 +822,7 @@ def build_transcript(
         f"$ {captures['release'].command}",
         "PASS",
         f"$ {captures['linkage'].command}",
-        "PASS: no INTERP program header",
+        "PASS: no INTERP program header or DT_NEEDED entry",
         "",
     ]
     return "\n".join(sections)
@@ -798,7 +845,10 @@ def build_summary(
             f"{counted(tests.passed, 'test')} pass; "
             f"{counted(tests.failed, 'failure')} observed"
         ),
-        "Release target: x86_64-unknown-linux-musl build pass; no INTERP header",
+        (
+            "Release target: x86_64-unknown-linux-musl build pass; "
+            "no INTERP header or DT_NEEDED entry"
+        ),
         "",
         "Observed verdicts:",
     ]
@@ -809,10 +859,13 @@ def build_summary(
             f"- {row['fixture']}: {row['verdict']}; "
             f"pristine={pristine['certainty']}@{pristine['frontier']} "
             f"({counted(pristine['keys'], 'key')}/"
-            f"{counted(pristine['deliveries'], 'delivery', 'deliveries')}); "
+            f"{counted(pristine['processed_deliveries'], 'processed delivery', 'processed deliveries')}); "
             f"faulted={faulted['certainty']}@{faulted['frontier']} "
             f"({counted(faulted['keys'], 'key')}/"
-            f"{counted(faulted['deliveries'], 'delivery', 'deliveries')})"
+            f"{counted(faulted['processed_deliveries'], 'processed delivery', 'processed deliveries')}); "
+            f"fingerprint-window={pristine['fingerprint_window']}; "
+            "stale-unverifiable="
+            f"{pristine['stale_unverifiable']}/{faulted['stale_unverifiable']}"
         )
     lines.extend(
         (
@@ -860,11 +913,11 @@ def terminal_svg(captures: dict[str, Capture], tests: TestTotals) -> str:
         text(
             60,
             101,
-            "Fresh stdout from executable examples · synthetic fixtures · CPU-only",
+            "Exact example stdout · normalized gates · synthetic fixtures · CPU-only",
             16,
             MUTED,
         ),
-        pill(1120, 48, 122, "EXACT", GREEN),
+        pill(1120, 48, 122, "VERIFIED", GREEN),
         pill(1254, 48, 126, "OFFLINE", CYAN),
         rect(48, 132, 1344, 630, PANEL, radius=18, stroke=LINE),
         circle(80, 164, 7, RED),
@@ -890,8 +943,8 @@ def terminal_svg(captures: dict[str, Capture], tests: TestTotals) -> str:
     return svg_document(
         "KVCrucible verified terminal evidence",
         (
-            "Exact output from the fault materialization and delivered fold "
-            "examples, followed by the local quality gates."
+            "Exact stdout from the fault materialization and delivered fold "
+            "examples, followed by normalized local quality-gate outcomes."
         ),
         1440,
         820,
@@ -1007,6 +1060,23 @@ def verdict_matrix_svg(verdicts: list[VerdictRow]) -> str:
                     TEXT,
                     family="mono",
                 ),
+                text(
+                    x + 28,
+                    321,
+                    (
+                        f"stream {row['stream']} · fp window "
+                        f"{pristine['fingerprint_window']} · "
+                        + (
+                            "default profile"
+                            if pristine["fingerprint_window"] == 4_096
+                            else "fixture override"
+                        )
+                    ),
+                    11,
+                    MUTED,
+                    600,
+                    family="mono",
+                ),
                 text(x + 28, 340, "PRISTINE", 12, CYAN, 700),
                 metric_panel(x + 28, 356, pristine, CYAN),
                 text(x + 28, 490, "FAULTED", 12, PURPLE, 700),
@@ -1037,7 +1107,7 @@ def verdict_matrix_svg(verdicts: list[VerdictRow]) -> str:
                 815,
                 (
                     "Source: cargo run --quiet --example verdict_matrix · "
-                    "full facts are preserved in visual-evidence.json"
+                    "reviewed decision facts are preserved in visual-evidence.json"
                 ),
                 13,
                 MUTED,
@@ -1048,7 +1118,8 @@ def verdict_matrix_svg(verdicts: list[VerdictRow]) -> str:
         "KVCrucible eligibility-aware verdict matrix",
         (
             "Executed Converged, Diverged, and Ineligible scenarios with "
-            "pristine and faulted evidence facts."
+            "pristine and faulted decision facts, runtime fingerprint windows, "
+            "and stale-unverifiable diagnostics."
         ),
         1440,
         850,
@@ -1378,7 +1449,7 @@ def setup_workflow_svg(
             710,
             320,
             "RELEASE TARGET",
-            "static musl · no INTERP",
+            "static musl · no dynamic deps",
             AMBER,
         ),
         text(
@@ -1479,7 +1550,8 @@ def metric_panel(
                 x + 18,
                 y + 88,
                 (
-                    f"{counted(execution['deliveries'], 'admitted delivery', 'admitted deliveries')}"
+                    f"{counted(execution['processed_deliveries'], 'processed delivery', 'processed deliveries')}"
+                    f" · stale {execution['stale_unverifiable']}"
                 ),
                 13,
                 MUTED,
@@ -1542,19 +1614,37 @@ def timeline_nodes(
     return fragments
 
 
-def build_manifest(outputs: dict[str, bytes]) -> bytes:
+def capture_manifest_source_snapshot() -> ManifestSourceSnapshot:
+    return tuple(
+        (
+            path,
+            sha256_file(
+                ROOT / path,
+                limit_bytes=MAX_SOURCE_BYTES,
+                label="manifest input",
+            ),
+        )
+        for path in manifest_source_paths()
+    )
+
+
+def require_manifest_source_snapshot(
+    expected: ManifestSourceSnapshot,
+    phase: str,
+) -> None:
+    if capture_manifest_source_snapshot() != expected:
+        raise EvidenceError(f"manifest inputs changed {phase}")
+
+
+def build_manifest(
+    outputs: dict[str, bytes],
+    source_snapshot: ManifestSourceSnapshot,
+) -> bytes:
     manifest = {
         "schema": "kvcrucible.visual-manifest/v1",
         "inputs": [
-            {
-                "path": path,
-                "sha256": sha256_file(
-                    ROOT / path,
-                    limit_bytes=MAX_SOURCE_BYTES,
-                    label="manifest input",
-                ),
-            }
-            for path in manifest_source_paths()
+            {"path": path, "sha256": digest}
+            for path, digest in source_snapshot
         ],
         "outputs": [
             {"path": f"docs/visuals/generated/{name}", "sha256": sha256_bytes(body)}
@@ -1777,6 +1867,29 @@ def check_outputs(
                 file=sys.stderr,
             )
             return 1
+        wrong_modes = []
+        for name in outputs:
+            display = display_path(output_directory / name)
+            status = optional_entry_status_at(
+                directory_fd,
+                name,
+                "generated output",
+                display,
+            )
+            if status is None:
+                raise EvidenceError(
+                    f"generated output disappeared during inspection: {display}"
+                )
+            assert_regular_status(status, "generated output", display)
+            if stat.S_IMODE(status.st_mode) != GENERATED_OUTPUT_MODE:
+                wrong_modes.append(name)
+        if wrong_modes:
+            print(
+                "generated files with non-portable modes: "
+                + ", ".join(sorted(wrong_modes)),
+                file=sys.stderr,
+            )
+            return 1
         print("KVCrucible visual evidence is current")
         return 0
     finally:
@@ -1788,6 +1901,7 @@ def write_outputs(
     *,
     output_directory: Path = OUTPUT_DIRECTORY,
     expected_outputs: tuple[str, ...] = EXPECTED_OUTPUTS,
+    source_snapshot: ManifestSourceSnapshot | None = None,
 ) -> None:
     if set(outputs) != set(expected_outputs):
         raise EvidenceError("generator produced an unexpected output set")
@@ -1818,6 +1932,11 @@ def write_outputs(
             ordered_names.append("manifest.sha256.json")
         changed = 0
         for name in ordered_names:
+            if name == "manifest.sha256.json" and source_snapshot is not None:
+                require_manifest_source_snapshot(
+                    source_snapshot,
+                    "during evidence publication",
+                )
             display = display_path(output_directory / name)
             status = optional_entry_status_at(
                 directory_fd,
@@ -1834,7 +1953,10 @@ def write_outputs(
                     label="generated output",
                     display=display,
                 )
-                if current == outputs[name]:
+                if (
+                    current == outputs[name]
+                    and stat.S_IMODE(status.st_mode) == GENERATED_OUTPUT_MODE
+                ):
                     continue
             atomic_write_at(
                 directory_fd,
@@ -2383,6 +2505,7 @@ def atomic_write_at(
             if written <= 0:
                 raise OSError(errno.EIO, "short write")
             remaining = remaining[written:]
+        os.fchmod(descriptor, GENERATED_OUTPUT_MODE)
         os.fsync(descriptor)
         os.close(descriptor)
         descriptor = -1

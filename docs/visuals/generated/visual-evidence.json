@@ -25,7 +25,7 @@
       "result": "pass"
     },
     "linkage": {
-      "command": "readelf --program-headers --wide target/x86_64-unknown-linux-musl/release/kvcrucible",
+      "command": "readelf --program-headers --dynamic --wide target/x86_64-unknown-linux-musl/release/kvcrucible",
       "result": "pass"
     },
     "release": {
@@ -43,7 +43,7 @@
     },
     "verdicts": {
       "command": "cargo run --quiet --example verdict_matrix",
-      "stdout_sha256": "33e0b4ee52935dd4856524a3a0d137b17ff2a59381a417781f3b82298b49d4bd"
+      "stdout_sha256": "3d2649ac01f36598f151fda6e675e373b1771f4099c0b31d79448edfbb600d36"
     }
   },
   "contract": {
@@ -82,6 +82,7 @@
   },
   "quality_gate": {
     "clippy": "pass",
+    "dynamic_dependencies": "absent",
     "dynamic_interpreter": "absent",
     "format": "pass",
     "static_musl_release": "pass",
@@ -93,14 +94,16 @@
       "passed": 137
     }
   },
-  "schema": "kvcrucible.visual-evidence/v1",
+  "schema": "kvcrucible.visual-evidence/v2",
   "verdicts": [
     {
       "faulted": {
         "certainty": "Exact",
-        "deliveries": 4,
+        "fingerprint_window": 4096,
         "frontier": 2,
-        "keys": 3
+        "keys": 3,
+        "processed_deliveries": 4,
+        "stale_unverifiable": 0
       },
       "fixture": "synthetic/reorder-and-duplicate",
       "ineligibility": {
@@ -110,19 +113,24 @@
       },
       "pristine": {
         "certainty": "Exact",
-        "deliveries": 3,
+        "fingerprint_window": 4096,
         "frontier": 2,
-        "keys": 3
+        "keys": 3,
+        "processed_deliveries": 3,
+        "stale_unverifiable": 0
       },
       "schedule": "reorder-and-duplicate",
+      "stream": "s",
       "verdict": "Converged"
     },
     {
       "faulted": {
         "certainty": "Exact",
-        "deliveries": 1,
+        "fingerprint_window": 0,
         "frontier": 0,
-        "keys": 1
+        "keys": 1,
+        "processed_deliveries": 1,
+        "stale_unverifiable": 0
       },
       "fixture": "synthetic/same-cursor-selection",
       "ineligibility": {
@@ -132,19 +140,24 @@
       },
       "pristine": {
         "certainty": "Exact",
-        "deliveries": 2,
+        "fingerprint_window": 0,
         "frontier": 0,
-        "keys": 1
+        "keys": 1,
+        "processed_deliveries": 2,
+        "stale_unverifiable": 1
       },
       "schedule": "select-second",
+      "stream": "s",
       "verdict": "Diverged"
     },
     {
       "faulted": {
         "certainty": "Unknown",
-        "deliveries": 2,
+        "fingerprint_window": 4096,
         "frontier": 0,
-        "keys": 1
+        "keys": 1,
+        "processed_deliveries": 2,
+        "stale_unverifiable": 0
       },
       "fixture": "synthetic/missing-middle-envelope",
       "ineligibility": {
@@ -154,11 +167,14 @@
       },
       "pristine": {
         "certainty": "Exact",
-        "deliveries": 3,
+        "fingerprint_window": 4096,
         "frontier": 2,
-        "keys": 3
+        "keys": 3,
+        "processed_deliveries": 3,
+        "stale_unverifiable": 0
       },
       "schedule": "drop-middle",
+      "stream": "s",
       "verdict": "Ineligible"
     }
   ]

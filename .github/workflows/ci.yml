@@ -27,6 +27,11 @@ jobs:
       - name: Show pinned toolchain
         run: rustup show active-toolchain
 
+      - name: Verify evidence prerequisites
+        run: |
+          python3 -c 'import sys; assert sys.version_info >= (3, 11), sys.version'
+          readelf --version
+
       - name: Check formatting
         run: cargo fmt --all --check
 
@@ -50,9 +55,13 @@ jobs:
         run: |
           binary=./target/x86_64-unknown-linux-musl/release/kvcrucible
           headers="$RUNNER_TEMP/kvcrucible-elf-headers"
-          readelf --program-headers --wide "$binary" > "$headers"
+          readelf --program-headers --dynamic --wide "$binary" > "$headers"
           if grep -Eq '^[[:space:]]+INTERP[[:space:]]' "$headers"; then
             echo 'release binary unexpectedly has a dynamic interpreter' >&2
+            exit 1
+          fi
+          if grep -Eq '\(NEEDED\)' "$headers"; then
+            echo 'release binary unexpectedly has a dynamic dependency' >&2
             exit 1
           fi
 

@@ -1,6 +1,7 @@
 KVCrucible verified local evidence
 fixture-kind: synthetic
 scope: offline bounded traces; no production engine or GPU is exercised
+capture-format: exact contract/example stdout; normalized quality-gate outcomes; successful stderr omitted
 toolchain: rustc 1.97.0 (2d8144b78 2026-07-07)
 
 $ cargo run --quiet -- contract --format json
@@ -51,18 +52,23 @@ $ cargo run --quiet --example verdict_matrix
   {
     "fixture": "synthetic/reorder-and-duplicate",
     "schedule": "reorder-and-duplicate",
+    "stream": "s",
     "verdict": "Converged",
     "pristine": {
-      "deliveries": 3,
+      "processed_deliveries": 3,
       "certainty": "Exact",
       "frontier": 2,
-      "keys": 3
+      "keys": 3,
+      "fingerprint_window": 4096,
+      "stale_unverifiable": 0
     },
     "faulted": {
-      "deliveries": 4,
+      "processed_deliveries": 4,
       "certainty": "Exact",
       "frontier": 2,
-      "keys": 3
+      "keys": 3,
+      "fingerprint_window": 4096,
+      "stale_unverifiable": 0
     },
     "ineligibility": {
       "pristine_inexact": false,
@@ -73,18 +79,23 @@ $ cargo run --quiet --example verdict_matrix
   {
     "fixture": "synthetic/same-cursor-selection",
     "schedule": "select-second",
+    "stream": "s",
     "verdict": "Diverged",
     "pristine": {
-      "deliveries": 2,
+      "processed_deliveries": 2,
       "certainty": "Exact",
       "frontier": 0,
-      "keys": 1
+      "keys": 1,
+      "fingerprint_window": 0,
+      "stale_unverifiable": 1
     },
     "faulted": {
-      "deliveries": 1,
+      "processed_deliveries": 1,
       "certainty": "Exact",
       "frontier": 0,
-      "keys": 1
+      "keys": 1,
+      "fingerprint_window": 0,
+      "stale_unverifiable": 0
     },
     "ineligibility": {
       "pristine_inexact": false,
@@ -95,18 +106,23 @@ $ cargo run --quiet --example verdict_matrix
   {
     "fixture": "synthetic/missing-middle-envelope",
     "schedule": "drop-middle",
+    "stream": "s",
     "verdict": "Ineligible",
     "pristine": {
-      "deliveries": 3,
+      "processed_deliveries": 3,
       "certainty": "Exact",
       "frontier": 2,
-      "keys": 3
+      "keys": 3,
+      "fingerprint_window": 4096,
+      "stale_unverifiable": 0
     },
     "faulted": {
-      "deliveries": 2,
+      "processed_deliveries": 2,
       "certainty": "Unknown",
       "frontier": 0,
-      "keys": 1
+      "keys": 1,
+      "fingerprint_window": 4096,
+      "stale_unverifiable": 0
     },
     "ineligibility": {
       "pristine_inexact": false,
@@ -124,5 +140,5 @@ $ cargo test --all-targets --all-features --locked -- --test-threads=1
 PASS: 137 passed, 0 failed, 0 ignored
 $ cargo build --release --target x86_64-unknown-linux-musl --locked
 PASS
-$ readelf --program-headers --wide target/x86_64-unknown-linux-musl/release/kvcrucible
-PASS: no INTERP program header
+$ readelf --program-headers --dynamic --wide target/x86_64-unknown-linux-musl/release/kvcrucible
+PASS: no INTERP program header or DT_NEEDED entry
