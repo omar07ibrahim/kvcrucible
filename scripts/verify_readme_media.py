@@ -18,7 +18,10 @@ PNG_NAME: Final = "terminal-transcript.png"
 GIF_NAME: Final = "verdict-fault-workflow.gif"
 MANIFEST_NAME: Final = "manifest.sha256.json"
 EXPECTED_MEDIA_FILES: Final = (MANIFEST_NAME, PNG_NAME, GIF_NAME)
-EXPECTED_PRODUCTION_SHA256: Final[dict[str, str]] = {}
+EXPECTED_PRODUCTION_SHA256: Final[dict[str, str]] = {
+    GIF_NAME: "380257ca603264444db66947fa8b2eff829f85a6e735395c10cf5353ad19ef2a",
+    PNG_NAME: "b0ecd9ee01a2c9e128313350290aacaa9856988d47ba6a57eaef880d3ae1a509",
+}
 MANIFEST_SCHEMA: Final = "kvcrucible.readme-media-manifest/v1"
 EVIDENCE_SCHEMA: Final = "kvcrucible.visual-evidence/v2"
 DISCLAIMER: Final = (
