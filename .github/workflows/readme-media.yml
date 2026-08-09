@@ -1,0 +1,178 @@
+name: README media candidate
+
+on:
+  pull_request:
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: readme-media-candidate-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  PYTHONDONTWRITEBYTECODE: "1"
+  PYTHONNOUSERSITE: "1"
+  PYTHONSAFEPATH: "1"
+
+jobs:
+  render:
+    name: Render exact-event README media candidate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    outputs:
+      artifact-id: ${{ steps.upload.outputs.artifact-id }}
+      artifact-digest: ${{ steps.upload.outputs.artifact-digest }}
+      artifact-name: ${{ steps.identity.outputs.name }}
+
+    steps:
+      - name: Check out the immutable event revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Set up CPython 3.14
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14.4"
+
+      - name: Assert exact-event clean checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "omar07ibrahim/kvcrucible"
+          test "$GITHUB_EVENT_NAME" = "pull_request"
+          [[ "$GITHUB_REF" =~ ^refs/pull/[1-9][0-9]*/merge$ ]]
+          [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git rev-parse --show-toplevel)" = "$GITHUB_WORKSPACE"
+          test "$(git status --porcelain=v1 --untracked-files=normal --ignore-submodules=none)" = ""
+          test "$(python -c 'import platform; print(platform.python_version())')" = "3.14.4"
+          rustup show active-toolchain
+          readelf --version
+
+      - name: Require fresh executable-derived source evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -I -B tools/render_readme_visuals.py --check
+          test "$(git status --porcelain=v1 --untracked-files=normal --ignore-submodules=none)" = ""
+
+      - name: Render and independently verify the candidate twice
+        shell: bash
+        run: |
+          set -euo pipefail
+          first="$RUNNER_TEMP/kvcrucible-readme-media-first"
+          second="$RUNNER_TEMP/kvcrucible-readme-media-second"
+          test ! -e "$first"
+          test ! -e "$second"
+          python -I -B tools/render_readme_media.py candidate             --repository "$GITHUB_WORKSPACE"             --expected-revision "$GITHUB_SHA"             --output-directory "$first"
+          python -I -B tools/render_readme_media.py candidate             --repository "$GITHUB_WORKSPACE"             --expected-revision "$GITHUB_SHA"             --output-directory "$second"
+          expected=$'manifest.sha256.json\nterminal-transcript.png\nverdict-fault-workflow.gif'
+          test "$(find "$first" -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | sort)" = "$expected"
+          test "$(find "$second" -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | sort)" = "$expected"
+          for name in manifest.sha256.json terminal-transcript.png verdict-fault-workflow.gif; do
+            cmp --silent "$first/$name" "$second/$name"
+          done
+          python -I -B scripts/verify_readme_media.py             --repository "$GITHUB_WORKSPACE"             --directory "$first"
+          python -I -B scripts/verify_readme_media.py             --repository "$GITHUB_WORKSPACE"             --directory "$second"
+          test "$(git status --porcelain=v1 --untracked-files=normal --ignore-submodules=none)" = ""
+
+      - name: Define immutable artifact identity
+        id: identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          name="kvcrucible-readme-media-$GITHUB_SHA-$GITHUB_RUN_ATTEMPT"
+          printf 'name=%s\n' "$name" >> "$GITHUB_OUTPUT"
+
+      - name: Upload exact candidate bytes
+        id: upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.identity.outputs.name }}
+          path: ${{ runner.temp }}/kvcrucible-readme-media-first/
+          if-no-files-found: error
+          include-hidden-files: false
+          compression-level: 0
+          retention-days: 14
+
+      - name: Validate upload identity
+        shell: bash
+        env:
+          ARTIFACT_ID: ${{ steps.upload.outputs.artifact-id }}
+          ARTIFACT_DIGEST: ${{ steps.upload.outputs.artifact-digest }}
+        run: |
+          set -euo pipefail
+          [[ "$ARTIFACT_ID" =~ ^[0-9]+$ ]]
+          [[ "$ARTIFACT_DIGEST" =~ ^[0-9a-f]{64}$ ]]
+
+  audit:
+    name: Independently audit uploaded README media candidate
+    needs:
+      - render
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out the immutable event revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Set up CPython 3.14
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14.4"
+
+      - name: Assert immutable audit identity
+        shell: bash
+        env:
+          ARTIFACT_ID: ${{ needs.render.outputs.artifact-id }}
+          ARTIFACT_DIGEST: ${{ needs.render.outputs.artifact-digest }}
+          ARTIFACT_NAME: ${{ needs.render.outputs.artifact-name }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "omar07ibrahim/kvcrucible"
+          test "$GITHUB_EVENT_NAME" = "pull_request"
+          [[ "$GITHUB_REF" =~ ^refs/pull/[1-9][0-9]*/merge$ ]]
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git status --porcelain=v1 --untracked-files=normal --ignore-submodules=none)" = ""
+          test "$(python -c 'import platform; print(platform.python_version())')" = "3.14.4"
+          [[ "$ARTIFACT_ID" =~ ^[0-9]+$ ]]
+          [[ "$ARTIFACT_DIGEST" =~ ^[0-9a-f]{64}$ ]]
+          test "$ARTIFACT_NAME" =             "kvcrucible-readme-media-$GITHUB_SHA-$GITHUB_RUN_ATTEMPT"
+
+      - name: Require fresh executable-derived source evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -I -B tools/render_readme_visuals.py --check
+          test "$(git status --porcelain=v1 --untracked-files=normal --ignore-submodules=none)" = ""
+
+      - name: Download uploaded candidate by immutable ID
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ needs.render.outputs.artifact-id }}
+          path: ${{ runner.temp }}/kvcrucible-readme-media-audit
+
+      - name: Independently audit and reproduce uploaded bytes
+        shell: bash
+        run: |
+          set -euo pipefail
+          downloaded="$RUNNER_TEMP/kvcrucible-readme-media-audit"
+          reproduced="$RUNNER_TEMP/kvcrucible-readme-media-reproduced"
+          expected=$'manifest.sha256.json\nterminal-transcript.png\nverdict-fault-workflow.gif'
+          test "$(find "$downloaded" -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | sort)" = "$expected"
+          python -I -B scripts/verify_readme_media.py             --repository "$GITHUB_WORKSPACE"             --directory "$downloaded"
+          test ! -e "$reproduced"
+          python -I -B tools/render_readme_media.py candidate             --repository "$GITHUB_WORKSPACE"             --expected-revision "$GITHUB_SHA"             --output-directory "$reproduced"
+          for name in manifest.sha256.json terminal-transcript.png verdict-fault-workflow.gif; do
+            cmp --silent "$downloaded/$name" "$reproduced/$name"
+          done
+          test "$(git status --porcelain=v1 --untracked-files=normal --ignore-submodules=none)" = ""
