@@ -113,6 +113,14 @@
       "sha256": "4aac6454ede485e8b47a8ccc65492176463baf644e9c9b5b7a40b7e1fe41da6a"
     },
     {
+      "path": "tests/test_readme_media_verifier.py",
+      "sha256": "926bfc4f395e1e7f9306e667ebc535c6b13384a1177575b16af299fb94dafa02"
+    },
+    {
+      "path": "tests/test_render_readme_media.py",
+      "sha256": "e734b9ec6392924f5a1382b42e2bc0117aac98daec93b06f4abffbb7c44ad691"
+    },
+    {
       "path": "tests/test_render_readme_visuals.py",
       "sha256": "759bc133fd251da55a6acce2911545e1e1645947f89d57ebaa3948b94644ddf0"
     },
