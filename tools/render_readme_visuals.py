@@ -68,10 +68,13 @@ RED: Final = "#fb7185"
 SOURCE_PATHS: Final = (
     ".cargo/config.toml",
     ".github/workflows/ci.yml",
+    ".github/workflows/readme-media.yml",
     "Cargo.lock",
     "Cargo.toml",
     "README.md",
     "rust-toolchain.toml",
+    "scripts/verify_readme_media.py",
+    "tools/render_readme_media.py",
     "tools/render_readme_visuals.py",
 )
 

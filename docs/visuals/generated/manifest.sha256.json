@@ -9,6 +9,10 @@
       "sha256": "d800fbead3451c2da7559fa331dd62f44e9ef4c1580762fe54356812354cb75a"
     },
     {
+      "path": ".github/workflows/readme-media.yml",
+      "sha256": "b7c176bb3d3e4d716a27b82bb88dac018d612a4f08e450f477df06e0af061bf5"
+    },
+    {
       "path": "Cargo.lock",
       "sha256": "d56b404ef61ebcf19110441094b529669181cede4822a58614d337cdf473afd5"
     },
@@ -18,7 +22,7 @@
     },
     {
       "path": "README.md",
-      "sha256": "829ed76a2f6b3b41e46953429fbfd350f674f4dbb4270ec03405ac635038c2ee"
+      "sha256": "888bd5ab8dde0e6042b893ea3a67d50e4526c8df5934e5bb61750f882fed6507"
     },
     {
       "path": "docs/charter.md",
@@ -47,6 +51,10 @@
     {
       "path": "rust-toolchain.toml",
       "sha256": "dbac09f5d391c5243027b6cbcb9e5a762c12a0a7439337212cea71ed1e78616e"
+    },
+    {
+      "path": "scripts/verify_readme_media.py",
+      "sha256": "9d2c832925a439bbd789048c57e011355ebaa47124cecd1ac6ce64051a70f15a"
     },
     {
       "path": "spec/ir-v1.md",
@@ -113,6 +121,10 @@
       "sha256": "4aac6454ede485e8b47a8ccc65492176463baf644e9c9b5b7a40b7e1fe41da6a"
     },
     {
+      "path": "tests/test_readme_media_integration.py",
+      "sha256": "4e57be3b9b27468d52e2e667ce9fff2180852b966638a77aa3fd4f55b97b1d4f"
+    },
+    {
       "path": "tests/test_readme_media_verifier.py",
       "sha256": "926bfc4f395e1e7f9306e667ebc535c6b13384a1177575b16af299fb94dafa02"
     },
@@ -125,8 +137,12 @@
       "sha256": "759bc133fd251da55a6acce2911545e1e1645947f89d57ebaa3948b94644ddf0"
     },
     {
+      "path": "tools/render_readme_media.py",
+      "sha256": "318e2a5ba4ca10019e5e478f5163094feef9abaa81af1b4fb2eb39a3e01b9f28"
+    },
+    {
       "path": "tools/render_readme_visuals.py",
-      "sha256": "75702d7e2d904f2bbba32fe30d9e0f632caf4290b9acc6afe05167133010c373"
+      "sha256": "8f67d5e1c3947f4fb26b823dc1428a1d70c4e0a3f060f98b4db2830f97fdac49"
     }
   ],
   "outputs": [

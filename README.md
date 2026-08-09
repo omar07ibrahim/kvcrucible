@@ -18,17 +18,22 @@ inspecting GPU memory.
 > stable report commands, and a production-engine adapter are not.
 
 [![CI](https://github.com/omar07ibrahim/kvcrucible/actions/workflows/ci.yml/badge.svg)](https://github.com/omar07ibrahim/kvcrucible/actions/workflows/ci.yml)
+[![README media](https://github.com/omar07ibrahim/kvcrucible/actions/workflows/readme-media.yml/badge.svg)](https://github.com/omar07ibrahim/kvcrucible/actions/workflows/readme-media.yml)
 ![Rust 1.97](https://img.shields.io/badge/Rust-1.97-000000?logo=rust)
 ![License Apache--2.0](https://img.shields.io/badge/license-Apache--2.0-blue)
 
-[![Verified KVCrucible terminal evidence](docs/visuals/generated/terminal-evidence.svg)](docs/visuals/generated/terminal-evidence.svg)
+[![Verified KVCrucible executable transcript](docs/visuals/media/terminal-transcript.png)](docs/visuals/media/terminal-transcript.png)
 
-The terminal visual combines exact executable-example stdout with normalized
-quality-gate outcomes; it is not a hand-made mockup. The same run produces
+This deterministic evidence plate renders exact fault-example stdout and
+explicitly labeled normalized quality-gate outcomes from the checked
+[transcript](docs/visuals/generated/terminal-transcript.txt). It is
+evidence-derived, not an OS screenshot or terminal capture, and makes no
+benchmark claim. The same executable run produces
 [machine-readable evidence](docs/visuals/generated/visual-evidence.json),
 [a plain summary](docs/visuals/generated/evidence-summary.txt),
-[a verified evidence transcript](docs/visuals/generated/terminal-transcript.txt), and
-[a SHA-256 manifest](docs/visuals/generated/manifest.sha256.json).
+[an accessible vector transcript view](docs/visuals/generated/terminal-evidence.svg),
+[a source manifest](docs/visuals/generated/manifest.sha256.json), and
+[a raster media manifest](docs/visuals/media/manifest.sha256.json).
 The transcript preserves exact contract/example stdout, records normalized gate
 outcomes, and intentionally omits successful stderr.
 
@@ -93,6 +98,10 @@ cargo build --release --target x86_64-unknown-linux-musl --locked
 
 python3 tools/render_readme_visuals.py
 python3 tools/render_readme_visuals.py --check
+python3 tools/render_readme_media.py check \
+  --repository . --media-directory docs/visuals/media
+python3 scripts/verify_readme_media.py \
+  --repository . --directory docs/visuals/media
 ```
 
 The generator executes the examples and quality gates before rebuilding the
@@ -119,7 +128,14 @@ The fault demo validates and normalizes one trace, seals it, duplicates `e1`,
 moves `e2` before `e0`, folds the resulting stable occurrences, and compares
 that execution with the pristine physical order:
 
-[![KVCrucible deterministic fault execution](docs/visuals/generated/fault-timeline.svg)](docs/visuals/generated/fault-timeline.svg)
+[![KVCrucible executed fault and verdict workflow](docs/visuals/media/verdict-fault-workflow.gif)](docs/visuals/media/verdict-fault-workflow.gif)
+
+The evidence-derived animation plays once and carries the exact six reviewed
+fact records in its frame comments. It is not a production capture and does not
+report throughput or latency. The
+[static fault timeline](docs/visuals/generated/fault-timeline.svg) and
+[static verdict matrix](docs/visuals/generated/verdict-matrix.svg) remain
+available as non-animated alternatives.
 
 ```bash
 cargo run --example fault_materialization

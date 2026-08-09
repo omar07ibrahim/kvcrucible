@@ -1,14 +1,17 @@
-name: README media candidate
+name: README media
 
 on:
   pull_request:
+  push:
+    branches:
+      - main
 
 permissions:
   actions: read
   contents: read
 
 concurrency:
-  group: readme-media-candidate-${{ github.ref }}
+  group: readme-media-${{ github.ref }}
   cancel-in-progress: false
 
 env:
@@ -18,7 +21,7 @@ env:
 
 jobs:
   render:
-    name: Render exact-event README media candidate
+    name: Render and verify exact-event README media
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     outputs:
@@ -44,8 +47,12 @@ jobs:
         run: |
           set -euo pipefail
           test "$GITHUB_REPOSITORY" = "omar07ibrahim/kvcrucible"
-          test "$GITHUB_EVENT_NAME" = "pull_request"
-          [[ "$GITHUB_REF" =~ ^refs/pull/[1-9][0-9]*/merge$ ]]
+          if test "$GITHUB_EVENT_NAME" = "push"; then
+            test "$GITHUB_REF" = "refs/heads/main"
+          else
+            test "$GITHUB_EVENT_NAME" = "pull_request"
+            [[ "$GITHUB_REF" =~ ^refs/pull/[1-9][0-9]*/merge$ ]]
+          fi
           [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           test "$(git rev-parse --show-toplevel)" = "$GITHUB_WORKSPACE"
@@ -81,6 +88,21 @@ jobs:
           python -I -B scripts/verify_readme_media.py             --repository "$GITHUB_WORKSPACE"             --directory "$second"
           test "$(git status --porcelain=v1 --untracked-files=normal --ignore-submodules=none)" = ""
 
+      - name: Require exact committed media
+        shell: bash
+        run: |
+          set -euo pipefail
+          committed="$GITHUB_WORKSPACE/docs/visuals/media"
+          candidate="$RUNNER_TEMP/kvcrucible-readme-media-first"
+          test ! -L "$committed"
+          test -d "$committed"
+          python -I -B tools/render_readme_media.py check --repository "$GITHUB_WORKSPACE" --media-directory "$committed"
+          python -I -B scripts/verify_readme_media.py --repository "$GITHUB_WORKSPACE" --directory "$committed"
+          for name in manifest.sha256.json terminal-transcript.png verdict-fault-workflow.gif; do
+            cmp --silent "$candidate/$name" "$committed/$name"
+          done
+          test "$(git status --porcelain=v1 --untracked-files=normal --ignore-submodules=none)" = ""
+
       - name: Define immutable artifact identity
         id: identity
         shell: bash
@@ -89,7 +111,7 @@ jobs:
           name="kvcrucible-readme-media-$GITHUB_SHA-$GITHUB_RUN_ATTEMPT"
           printf 'name=%s\n' "$name" >> "$GITHUB_OUTPUT"
 
-      - name: Upload exact candidate bytes
+      - name: Upload exact README media bytes
         id: upload
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -111,7 +133,7 @@ jobs:
           [[ "$ARTIFACT_DIGEST" =~ ^[0-9a-f]{64}$ ]]
 
   audit:
-    name: Independently audit uploaded README media candidate
+    name: Independently audit uploaded README media
     needs:
       - render
     runs-on: ubuntu-24.04
@@ -139,8 +161,12 @@ jobs:
         run: |
           set -euo pipefail
           test "$GITHUB_REPOSITORY" = "omar07ibrahim/kvcrucible"
-          test "$GITHUB_EVENT_NAME" = "pull_request"
-          [[ "$GITHUB_REF" =~ ^refs/pull/[1-9][0-9]*/merge$ ]]
+          if test "$GITHUB_EVENT_NAME" = "push"; then
+            test "$GITHUB_REF" = "refs/heads/main"
+          else
+            test "$GITHUB_EVENT_NAME" = "pull_request"
+            [[ "$GITHUB_REF" =~ ^refs/pull/[1-9][0-9]*/merge$ ]]
+          fi
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           test "$(git status --porcelain=v1 --untracked-files=normal --ignore-submodules=none)" = ""
           test "$(python -c 'import platform; print(platform.python_version())')" = "3.14.4"
@@ -174,5 +200,11 @@ jobs:
           python -I -B tools/render_readme_media.py candidate             --repository "$GITHUB_WORKSPACE"             --expected-revision "$GITHUB_SHA"             --output-directory "$reproduced"
           for name in manifest.sha256.json terminal-transcript.png verdict-fault-workflow.gif; do
             cmp --silent "$downloaded/$name" "$reproduced/$name"
+          done
+          committed="$GITHUB_WORKSPACE/docs/visuals/media"
+          test ! -L "$committed"
+          test -d "$committed"
+          for name in manifest.sha256.json terminal-transcript.png verdict-fault-workflow.gif; do
+            cmp --silent "$downloaded/$name" "$committed/$name"
           done
           test "$(git status --porcelain=v1 --untracked-files=normal --ignore-submodules=none)" = ""
