@@ -122,7 +122,7 @@
     },
     {
       "path": "tests/test_readme_media_integration.py",
-      "sha256": "4e57be3b9b27468d52e2e667ce9fff2180852b966638a77aa3fd4f55b97b1d4f"
+      "sha256": "939a8aca49037f00083cc5a24583cb3a4cbee081448bd00014d531138b4cd157"
     },
     {
       "path": "tests/test_readme_media_verifier.py",

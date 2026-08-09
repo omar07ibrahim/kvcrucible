@@ -97,7 +97,7 @@ class PublishedReadmeMediaTests(unittest.TestCase):
             "docs/visuals/generated/verdict-matrix.svg",
             readme,
         )
-        lowered = readme.lower()
+        lowered = " ".join(readme.lower().split())
         self.assertIn("not an os screenshot or terminal capture", lowered)
         self.assertIn("makes no benchmark claim", lowered)
         self.assertIn("animation plays once", lowered)
