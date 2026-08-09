@@ -130,7 +130,7 @@
     },
     {
       "path": "tests/test_render_readme_media.py",
-      "sha256": "e734b9ec6392924f5a1382b42e2bc0117aac98daec93b06f4abffbb7c44ad691"
+      "sha256": "2e2d2947bd8c9f2a1b5aaf569941e931efdd8c83446621bc68493a6bea0b14fb"
     },
     {
       "path": "tests/test_render_readme_visuals.py",
@@ -138,7 +138,7 @@
     },
     {
       "path": "tools/render_readme_media.py",
-      "sha256": "318e2a5ba4ca10019e5e478f5163094feef9abaa81af1b4fb2eb39a3e01b9f28"
+      "sha256": "900587cc32b8c5f19ce94dc122f321909b70a8857c929e8a4c3954e883943cf8"
     },
     {
       "path": "tools/render_readme_visuals.py",

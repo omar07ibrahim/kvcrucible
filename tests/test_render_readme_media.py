@@ -128,6 +128,16 @@ class ReadmeMediaRendererTests(unittest.TestCase):
         ):
             self.renderer.render_media(sources)
 
+    def test_committed_media_reader_uses_output_byte_budget(self) -> None:
+        committed = self.renderer._read_media_directory(
+            ROOT / "docs/visuals/media"
+        )
+        self.assertGreater(
+            len(committed["terminal-transcript.png"]),
+            self.renderer.MAX_SOURCE_BYTES,
+        )
+        self.assertEqual(committed, self.outputs)
+
     def test_tool_bytes_are_bound_but_not_semantic_authority(self) -> None:
         changed = dict(self.sources)
         changed[self.renderer.AUDITOR_PATH] += b"\n"

@@ -1270,7 +1270,15 @@ def _stable_stat(metadata: os.stat_result) -> tuple[int, ...]:
     )
 
 
-def _read_relative(root: Path, relative: str) -> bytes:
+def _read_relative(
+    root: Path,
+    relative: str,
+    *,
+    maximum: int = MAX_SOURCE_BYTES,
+    label: str = "source file",
+) -> bytes:
+    if maximum <= 0 or maximum > MAX_OUTPUT_BYTES:
+        raise MediaError("file byte budget is invalid")
     parts = Path(relative).parts
     if (
         not parts
@@ -1303,21 +1311,21 @@ def _read_relative(root: Path, relative: str) -> bytes:
                     not stat.S_ISREG(metadata.st_mode)
                     or metadata.st_nlink != 1
                     or metadata.st_size <= 0
-                    or metadata.st_size > MAX_SOURCE_BYTES
+                    or metadata.st_size > maximum
                 ):
-                    raise MediaError(f"source file contract differs: {relative}")
+                    raise MediaError(f"{label} contract differs: {relative}")
                 chunks: list[bytes] = []
                 remaining = metadata.st_size
                 while remaining:
                     chunk = os.read(file_descriptor, min(65536, remaining))
                     if not chunk:
-                        raise MediaError(f"source file was truncated: {relative}")
+                        raise MediaError(f"{label} was truncated: {relative}")
                     chunks.append(chunk)
                     remaining -= len(chunk)
                 if os.read(file_descriptor, 1):
-                    raise MediaError(f"source file grew while being read: {relative}")
+                    raise MediaError(f"{label} grew while being read: {relative}")
                 if _stable_stat(os.fstat(file_descriptor)) != _stable_stat(metadata):
-                    raise MediaError(f"source file changed while being read: {relative}")
+                    raise MediaError(f"{label} changed while being read: {relative}")
                 return b"".join(chunks)
             finally:
                 os.close(file_descriptor)
@@ -1440,7 +1448,15 @@ def _read_media_directory(directory: Path) -> dict[str, bytes]:
         observed = tuple(sorted(entry.name for entry in os.scandir(root)))
         if observed != EXPECTED_OUTPUTS:
             raise MediaError("media directory inventory is not closed")
-        return {name: _read_relative(root, name) for name in EXPECTED_OUTPUTS}
+        return {
+            name: _read_relative(
+                root,
+                name,
+                maximum=MAX_OUTPUT_BYTES,
+                label="media file",
+            )
+            for name in EXPECTED_OUTPUTS
+        }
     except OSError as error:
         raise MediaError("media directory cannot be read safely") from error
 
